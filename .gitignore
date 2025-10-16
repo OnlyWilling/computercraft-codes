@@ -1,0 +1,5 @@
+# Ignore builds and zip files
+*.zip
+*.workspace
+# Ignore CraftOS Setup
+./CraftOS Setup
