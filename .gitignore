@@ -1,2 +1,27 @@
-./*.zip
-./*.code-workspace
+# 忽略依赖项和构建产物
+/node_modules
+/build
+/dist
+
+# 忽略所有 .zip 压缩包
+*.zip
+
+# 忽略日志和临时文件
+*.log
+*.tmp
+*.bak
+
+# 忽略 VS Code 编辑器配置
+.vscode/
+*.code-workspace
+
+# 忽略操作系统生成的文件
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
