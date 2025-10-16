@@ -1,5 +1,45 @@
+-- ===函数区===
+local function parser(bimg_player, args)
+    -- Show help if no arguments
+    if #args == 0 then
+        bimg_player.showHelp()
+        return
+    end
+
+    -- Parse arguments
+    local ok, path, opts = pcall(bimg_player.parseArguments, args)
+    if not ok then
+        printError(path) -- Here path contains the error message
+        bimg_player.showHelp()
+        return
+    elseif not path then
+        return -- User requested help
+    end
+
+    -- Load image
+    local img = nil
+    if opts.isURL then
+        img = bimg_player.loadImageURL(path)
+    else
+        img = bimg_player.loadImageFile(path)
+    end
+
+    -- Check img is not nil
+    if not img then
+        error("Failed to load image from: " .. path)
+        return
+    end
+
+    -- Apply display scale
+    if opts.scale and img.multiMonitor then
+        img.multiMonitor.scale = opts.scale
+    end
+    return opts, img
+end
+
 -- 引入所需的API
 local basalt = require("basalt")
+local bimg_player = require("bimg_player")
 
 -- 1. 创建窗口
 -- 清空屏幕
@@ -20,6 +60,12 @@ local ui_window = window.create(term.current(), 1, 1, screenW, ui_height)
 -- 为shell创建一个窗口，占据屏幕下方5行
 local shell_window = window.create(term.current(), 1, ui_height + 2, screenW, shell_height - 1)
 
+local video_monitor = peripheral.find("monitor") or shell_window
+local video_file = "demo.bimg"
+local video_player_instance = nil
+local video_coroutine = nil
+
+
 -- 2. 定义UI任务函数
 local function ui_task()
     -- 将所有Basalt的绘制操作重定向到UI窗口
@@ -28,12 +74,12 @@ local function ui_task()
 
     -- 添加一个标题
     local label1 = main:addLabel()
-        :setText("Basalt UI Panel")
+        :setText("Bimg Controler")
         :setPosition(3, 2)
 
     -- 添加一个按钮，点击时在下方的shell窗口打印信息
     local btn1 = main:addButton()
-        :setPosition(3, 4)
+        :setPosition(3, 3)
         :setSize(20, 3)
         :setText("Print to Shell")
         :onClick(function()
@@ -51,7 +97,7 @@ local function ui_task()
             end
         end)
     local btn2 = main:addButton()
-        :setPosition(25, 4)
+        :setPosition(25, 3)
         :setSize(20, 3)
         :setText("Clear Shell")
         :onClick(function()
@@ -59,7 +105,42 @@ local function ui_task()
             shell_window.setCursorPos(1, 1)
         end)
     local btn3 = main:addButton()
-        :setPosition(14, 8)
+        :setPosition(3, 7)
+        :setSize(20, 3)
+        :setText("Play Bimg")
+        :onClick(function(self)
+            if video_coroutine then
+                os.queueEvent("bimg_stop")
+                self:setText("Playing...")
+                return
+            end
+
+            video_coroutine = coroutine.create(function()
+                btn3:setText("Stop play")
+                local img = bimg_player.loadImageFile(video_file)
+                local player = bimg_player:create(img, { display = video_monitor, loop = true })
+                local function keysHandler()
+                    while true do
+                        -- 注意：这里监听的是全局事件
+                        local ev, p1 = os.pullEvent()
+                        if ev == "key" then
+                            if p1 == keys.q or p1 == keys.escape then
+                                player.ctrl.stop()
+                            end
+                            -- 当UI按钮被点击时，它会发送这个自定义事件
+                        elseif ev == "bimg_stop" then
+                            player.ctrl.stop()
+                        end
+                    end
+                end
+                parallel.waitForAny(player.run, keysHandler)
+                video_monitor.clear()
+                video_coroutine = nil
+            end)
+            coroutine.resume(video_coroutine)
+        end)
+    local btn4 = main:addButton()
+        :setPosition(25, 7)
         :setSize(20, 3)
         :setText("Exit Program")
         :onClick(function()
@@ -78,6 +159,7 @@ end
 local function shell_task()
     -- 将所有shell相关的操作重定向到shell窗口
     term.redirect(shell_window)
+    local shell_env = setmetatable({}, { __index = _G })
 
     -- 给shell窗口一个初始提示
     shell_window.clear()
@@ -85,7 +167,7 @@ local function shell_task()
     print("Standard CC Shell. Type 'exit' to stop.")
 
     -- 运行一个交互式shell
-    os.run({}, '/rom/programs/shell.lua')
+    os.run(shell_env, '/rom/programs/shell.lua')
 
     -- 任务结束后，恢复重定向
     term.redirect(native_term)

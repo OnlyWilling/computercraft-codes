@@ -57,7 +57,7 @@ function player.parseArguments(args)
     local i = 1
     while i <= #args do
         local arg = args[i]
-        if arg == "--loop" then
+        if arg == "--loop" or arg == "-l" then
             options.loop = true
         elseif arg == "--url" then
             options.isURL = true
