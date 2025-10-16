@@ -1,7 +1,4 @@
-local function main(...)
-    local args = { ... }
-    local bimg_player = require("bimg_player")
-
+local function parser(bimg_player, args)
     -- Show help if no arguments
     if #args == 0 then
         bimg_player.showHelp()
@@ -35,6 +32,18 @@ local function main(...)
     -- Apply display scale
     if opts.scale and img.multiMonitor then
         img.multiMonitor.scale = opts.scale
+    end
+    return opts, img
+end
+
+local function main(...)
+    local args = { ... }
+    local bimg_player = require("bimg_player")
+
+    local opts, img = parser(bimg_player, args)
+
+    if not opts or not img then
+        return
     end
 
     local player = bimg_player:create(img, opts)
