@@ -20,7 +20,7 @@ end
 function dinerManager:recipeTransfer(fromslot)
     local num = self.recipe_storage.pushItems(peripheral.getName(self.manager_deployer), fromslot, 64, 1)
     if num == 0 then
-        printError("Transfer failed!")
+        print("Transfer failed!")
         return false
     else
         print(("Transferred %d item(s) from storage[%d] to manager[%d]"):format(num, fromslot, 1))
@@ -31,7 +31,7 @@ end
 function dinerManager:recipeTakeback(toslot)
     local num = self.manager_deployer.pushItems(peripheral.getName(self.recipe_storage), 1, 64, toslot)
     if num == 0 then
-        printError("Transfer failed!")
+        print("Transfer failed!")
         return false
     else
         print(("Transferred %d item(s) from manager[%d] to storage[%d]"):format(num, 1, toslot))
@@ -45,7 +45,7 @@ function dinerManager:recipeWaitForChange() -- Trigger Gear Box
     self.relay.setOutput("front", false)
 end
 
-function dinerManager.callForIngredients(integrator, direction)
+function dinerManager:callForIngredients(integrator, direction)
     integrator.setOutput(direction, true)
     os.sleep(0.2)
     integrator.setOutput(direction, false)

@@ -1,35 +1,26 @@
-local fruits = { test_num = 123, "Apple", "Banana", "Orange", ["color"]="Blue"}
-print("TEST HERE".."\t"..fruits["color"])
-fruits[5] = "Grape"   -- 不连续的索引
-fruits["color"] = "Red" -- 字符串索引
-function fruits:dummy(dice)
-    print(dice[2])
-    print("TEST HERE 2:"..self.test_num)
-    self["color"] = "Green"
-    print("TEST HERE".."\t"..self["color"])
-end
-print("TEST HERE".."\t"..fruits["color"])
+-- local integrator = peripheral.wrap("redstoneIntegrator_19") or error("No integrator found", 0)
+-- integrator.setOutput("top", true)
+local da = peripheral.find("digital_adapter") or error("No display found", 0)
+da.print("TEST HERE1")
+da.setLine(2)
+da.print("中文测试")
+da.clearLine(2)
+da.print("中文测试")
 
-print("--- USE ipairs ---")
-for index, value in ipairs(fruits) do
-    print(index, value)
-end
--- 输出:
--- --- 使用 ipairs ---
--- 1   Apple
--- 2   Banana
--- 3   Orange
--- (遍历在索引3之后就停止了，因为索引4是nil)
+-- 创建一个包含中文字符串的表格
+local myTable = {
+    greeting = "你好，世界！",
+    name = "中文测试"
+}
 
-print("--- USE pairs ---")
-for key, value in pairs(fruits) do
-    print(key, value)
+-- 使用 textutils.serializeJSON 序列化这个表格
+local jsonString = textutils.serializeJSON(myTable, { unicode_strings = true })
+print("Serialized JSON string:")
+print(jsonString)
+
+local originString = textutils.unserializeJSON(jsonString)
+print("Unserialized JSON string:")
+for k,v in pairs(originString) do
+    print(k, v)
 end
--- 可能的输出 (顺序不保证):
--- --- 使用 pairs ---
--- 1   Apple
--- 2   Banana
--- 3   Orange
--- color Red
--- 5   Grape
-fruits:dummy({1,2})
+-- print(originString)
