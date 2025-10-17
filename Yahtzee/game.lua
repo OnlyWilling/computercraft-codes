@@ -1,5 +1,5 @@
 -- Import scoring.lua
-local Scoring = require("Yahtzee.scoring")
+local Scoring = require("scoring")
 
 -- 游戏状态表
 local Game = {
