@@ -65,6 +65,7 @@ local video_file = "demo.bimg"
 local video_player_instance = nil
 local video_coroutine = nil
 
+video_monitor.write("Monitor Found")
 
 -- 2. 定义UI任务函数
 local function ui_task()

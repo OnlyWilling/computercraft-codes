@@ -1,8 +1,6 @@
-local player = {}
-
 local httpEnabled = http and http.get
 -- Show help message
-function player.showHelp()
+local function showHelp()
     print("BIMG Player - Usage:")
     print("bimg_player <file.bimg> [options]")
     print()
@@ -20,7 +18,7 @@ function player.showHelp()
 end
 
 -- Load image file
-function player.loadImageFile(path)
+local function loadImageFile(path)
     local file, err = fs.open(shell.resolve(path), "rb")
     if not file then error("Cannot open file: " .. err) end
     local data = file.readAll()
@@ -31,7 +29,7 @@ function player.loadImageFile(path)
 end
 
 -- Load image from URL
-function player.loadImageURL(url)
+local function loadImageURL(url)
     if not httpEnabled then
         error("HTTP API not available, cannot load from URL")
     end
@@ -50,7 +48,7 @@ function player.loadImageURL(url)
 end
 
 -- Parse command line arguments
-function player.parseArguments(args)
+local function parseArguments(args)
     local options = {}
     local path = nil
 
@@ -183,7 +181,7 @@ local function cleanupTerminal(termObj)
 end
 
 -- Main playback function
-function player:playAnimation(img)
+local function playAnimation(self, img)
     repeat
         self.state.frameindex = 1
         if img.multiMonitor then
@@ -233,10 +231,12 @@ function player:playAnimation(img)
 end
 
 -- Create a bimg player
-function player:create(img, opts)
+local function create(img, opts)
     opts = opts or {}
+    local player = { playAnimation = playAnimation } -- create prototype
     local obj = {}
-    setmetatable(obj, { __index = self })
+    setmetatable(obj, { __index = player })
+
     obj.displayObj = opts.display or term
     obj.fps = opts.fps or (img.secondsPerFrame and (1 / img.secondsPerFrame)) or 20
     obj.frameDelay = 1 / obj.fps
@@ -259,4 +259,13 @@ function player:create(img, opts)
     }
 end
 
-return player
+return {
+    -- Builder: create player
+    create = create,
+
+    -- Tools
+    showHelp = showHelp,
+    loadImageFile = loadImageFile,
+    loadImageURL = loadImageURL,
+    parseArguments = parseArguments,
+}

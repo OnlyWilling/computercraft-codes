@@ -46,7 +46,7 @@ local function main(...)
         return
     end
 
-    local player = bimg_player:create(img, opts)
+    local player = bimg_player.create(img, opts)
 
     local function keysHandler()
         while true do
