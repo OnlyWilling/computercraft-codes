@@ -9,7 +9,7 @@ if not fs.exists(apiName) then
    shell.run("pastebin get " .. pasteLink .. " " .. apiName) --downloads the API
 end
 
-local touchpoint = require(apiName)
+os.loadAPI(apiName)
 local helper = require("helper")
 local dinerManager = require("dinerManager")
 
@@ -53,8 +53,8 @@ while not fs.exists(infoName) or not floor or not id do --check if file exists
    h.close()
 end
 
-local h = fs.open(infoName, "r") --reads from a file,r means read only
-infoTable = infoTable or textutils.unserialize(h.readAll())
+local h = fs.open(infoName, "r") --reads from a file, r means read only
+infoTable = next(infoTable) and infoTable or textutils.unserialize(h.readAll())
 if not infoTable then
    fs.delete(infoName)
    os.reboot()
@@ -62,9 +62,8 @@ end
 floor = tonumber(infoTable[1])
 id = tonumber(infoTable[2])
 currentPage = tonumber(infoTable[3])
-term.setCursorPos(1, 5)
-print("Total number of floors: " .. floor)
-print("ID of receiving computer: " .. id)
+print("Got Total number of recipes: " .. floor)
+print("ID of working computer: " .. id)
 h.close()
 
 -- Prompt user for device names corresponding to floors (e.g. "redstoneIntegrator_25 ...")
@@ -73,8 +72,6 @@ local deviceInfoName = "devices.info"
 local indexToName, indexToPeripheral = {}, {}
 if not fs.exists(deviceInfoName) then
    local baseDevicePrefix = "redstoneIntegrator_"
-   term.setCursorPos(1, 7)
-   term.clearLine()
    print("=== Device Mapping ===")
    print("Please enter " .. tostring(floor) .. " numbers (comma or space separated), e.g. 1 2 3 4")
    print("Each will be mapped as: redstoneIntegrator_<number>")
@@ -123,7 +120,7 @@ end
 -- Print final mapping including sides
 print("===Final mappings with sides===")
 for i = 1, #indexToName do
-   print(string.format(" %2d -> %-21s:side=%s", i, indexToName[i], tostring(indexToSide[i] or "north")))
+   print(string.format("%2d -> %-21s:side=%s", i, indexToName[i], tostring(indexToSide[i] or "north")))
 end
 print("")
 print("Press E to clear data...")
@@ -141,7 +138,7 @@ end
 
 local page = {}
 for i = 1, numberOfPages do
-   page[i] = touchpoint.new(monitorSide) --add pages
+   page[i] = touchpoint.new(peripheral.getName(monitorSide)) --add pages
    if i ~= numberOfPages then
       page[i]:add(">>", nil, monitorWidth - 3, monitorHeight, monitorWidth, monitorHeight, colors.black, colors.white)
    end
@@ -183,6 +180,8 @@ for i = 1, floor do
    end
 end
 
+-- print("")
+
 dinerManager:init()
 -- dinerManager:checkItemDetails()
 
@@ -202,10 +201,10 @@ while true do
          local dev = indexToPeripheral[chosen]
          local side = indexToSide[chosen]
          if (dev and type(dev.setOutput) == "function") then
-            if not dinerManager:recipeTransfer(chosen) then page[currentPage]:flash(p1, 1, colors.red) end
+            dinerManager:recipeTransfer(chosen)
             dinerManager:recipeWaitForChange()
             dinerManager:recipeTakeback(chosen)
-            dinerManager.callForIngredients(dev, side)
+            dinerManager:callForIngredients(dev, side)
             print(("Call for Ingredients on %d on side %s").format(chosen, side))
          else
             print("[Error] No valid integrator or side for button " .. tostring(chosen))
