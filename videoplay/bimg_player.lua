@@ -61,8 +61,8 @@ local function parseArguments(args)
             options.isURL = true
         elseif arg == "--monitor" then
             i = i + 1
-            options.terminal = peripheral.wrap(args[i])
-            if not options.terminal then
+            options.display = peripheral.wrap(args[i])
+            if not options.display then
                 error("Invalid monitor side: " .. (args[i] or "nil"))
             end
         elseif arg == "--scale" then

@@ -63,7 +63,7 @@ function changeBalance(amount, userId)
 
     -- local event, side, channel, replyChannel, message, distance = os.pullEvent("modem_message")
     if msg ~= nil then
-        print("Success! Received: "..tostring(message))
+        print("Success! Received: " .. tostring(message))
         disk.setLabel(peripheral.getName(drive), tostring(getBalance(userId)) .. " chips")
         return message
     else
