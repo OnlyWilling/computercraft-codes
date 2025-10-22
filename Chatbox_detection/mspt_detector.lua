@@ -2,14 +2,14 @@ local BASE_DIR = shell.getRunningProgram():match("(.*/)") or "/"
 local CONFIG_PATH = fs.combine(BASE_DIR, "msptDetector.cfg")
 local defaultConfig = {
     -- -----时间配置-----
-    mspt_threshold = 50,          -- MSPT 阈值
-    max_failures = 3,             -- 切换到 "severe" 状态所需的最大连续失败次数
-    normal_check_interval = 3,    -- 正常状态下，每次检测间的间隔（秒）
-    warning_cooldown = 10,        -- 警告状态下，每次重试前的冷却时间（秒）
-    severe_check_interval = 300,  -- 严重状态下，每次检测的间隔（5分钟）
+    mspt_threshold = 50,           -- MSPT 阈值
+    max_failures = 5,              -- 切换到 "severe" 状态所需的最大连续失败次数
+    normal_check_interval = 5,     -- 正常状态下，每次检测间的间隔（秒）
+    warning_cooldown = 10,         -- 警告状态下，每次重试前的冷却时间（秒）
+    severe_check_interval = 300,   -- 严重状态下，每次检测的间隔（5分钟）
     -- -----时钟配置-----
-    redstone_push_side = "right", -- 同步时钟发出侧
-    redstone_pull_side = "left",  -- 同步时钟监听侧
+    redstone_push_side = "back",   -- 同步时钟发出侧
+    redstone_pull_side = "bottom", -- 同步时钟监听侧
 }
 
 local config = {}
@@ -98,15 +98,18 @@ local function msptDetector(mspt_thres)
 
     function receiveTimer()
         local event = os.pullEvent("redstone")
-        ev = event
+        if relay.getInput(config.redstone_pull_side) then
+            ev = event
+        end
     end
 
     if relay ~= nil then
         relay.setOutput(config.redstone_push_side, true)
-        relay.setOutput(config.redstone_pull_side, false)
+        parallel.waitForAny(receiveTimer, timeoutCheck)
+        relay.setOutput(config.redstone_push_side, false)
+    else
+        error("Relay Offline!")
     end
-
-    parallel.waitForAny(receiveTimer, timeoutCheck)
 
     if ev ~= nil then
         printColored({
@@ -255,9 +258,9 @@ config = loadConfig(CONFIG_PATH)
 mon = peripheral.find("monitor") or term
 relay = peripheral.find("redstone_relay") or nil
 
--- if  relay == nil then
---     error("Relay not found!")
--- end
+if relay == nil then
+    error("Relay not found!")
+end
 
 if mon ~= term then
     term.setTextColor(colors.green)

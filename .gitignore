@@ -26,3 +26,8 @@
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+
+# 忽略其他文件
+challengeServer1.3.0.js
+challengeServerCfg1.0.0.js
+JS.md
