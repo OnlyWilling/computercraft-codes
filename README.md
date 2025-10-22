@@ -12,6 +12,6 @@ Hi，欢迎来到我的CC代码库，目前正在学习和尝试一些CC代码�
 ## Others
 包括 Yahtzee | battleship | casino | sanjunni | videoshow
 主要为其他开发者的参考代码，以及一些工具软件
-## Inventorymanager
+## CoTuManger(CooperatingTurtle)
 基于stockpile api开发的综合库存管理、配方管理/库存监控/海龟合成/自动补货系统，力求实现多海龟（turtle）自适应组网合成，生产任务分配和自动合成系统。
 - 状态:[Half Complete] 实现了库存计算、配方记录和计算、单海龟合成，需进一步开发自组网和分配,完善GUI。
