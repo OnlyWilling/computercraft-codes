@@ -93,7 +93,7 @@ local function msptDetector(mspt_thres)
     local ev = nil
 
     function timeoutCheck()
-        os.sleep(1.2 * (mspt_thres / 50)) -- allow 20% spare
+        os.sleep((mspt_thres / 50) + 0.1) -- allow 2 ticks spare
     end
 
     function receiveTimer()
