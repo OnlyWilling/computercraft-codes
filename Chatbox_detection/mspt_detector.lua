@@ -2,19 +2,16 @@ local BASE_DIR = shell.getRunningProgram():match("(.*/)") or "/"
 local CONFIG_PATH = fs.combine(BASE_DIR, "msptDetector.cfg")
 local defaultConfig = {
     -- -----时间配置-----
-    mspt_threshold = 50,           -- MSPT 阈值
-    max_failures = 5,              -- 切换到 "severe" 状态所需的最大连续失败次数
-    normal_check_interval = 5,     -- 正常状态下，每次检测间的间隔（秒）
-    warning_cooldown = 10,         -- 警告状态下，每次重试前的冷却时间（秒）
-    severe_check_interval = 300,   -- 严重状态下，每次检测的间隔（5分钟）
-    -- -----时钟配置-----
-    redstone_push_side = "back",   -- 同步时钟发出侧
-    redstone_pull_side = "bottom", -- 同步时钟监听侧
+    mspt_threshold = 50,         -- MSPT 阈值
+    detect_time = 5,             -- 每次检测的持续时间（秒）
+    max_failures = 5,            -- 切换到 "severe" 状态所需的最大连续失败次数
+    normal_check_interval = 5,   -- 正常状态下，每次检测间的间隔（秒）
+    warning_cooldown = 10,       -- 警告状态下，每次重试前的冷却时间（秒）
+    severe_check_interval = 300, -- 严重状态下，每次检测的间隔（5分钟）
 }
 
 local config = {}
 local mon = nil      -- Monitor
-local relay = nil    -- Redstone relay
 local old_term = nil -- old term
 
 --- 将配置表保存到文件。
@@ -86,47 +83,41 @@ local function getTimestamp()
 end
 
 --- 检测服务器MSPT是否在可接受的范围内
---- @param mspt_thres number 允许的最高MSPT值。默认50。
---- @return event ev 如果性能正常，返回接收到的 "redstone" 事件；如果超时，返回 nil。
-local function msptDetector(mspt_thres)
-    mspt_thres = mspt_thres or 50 -- default mspt threshold
-    local ev = nil
+--- @param detect_time number 检测时间，单位秒。默认5秒
+--- @param mspt_thres number 允许的最高MSPT值。默认50
+--- @return boolean res 如果性能正常，返回true；如果超时，返回 nil
+local function msptDetector(detect_time, mspt_thres)
+    mspt_thres = mspt_thres or 50           -- default mspt threshold
+    local ticks_to_sleep = detect_time * 20 + 5 -- convert time to ticks, spare 5 ticks
+    local realTimeDuration = 0
 
-    function timeoutCheck()
-        os.sleep((mspt_thres / 50) + 0.1) -- allow 2 ticks spare
-    end
+    repeat
+        local startTime_ms = os.epoch("utc")
+        os.sleep(detect_time)
+        local endTime_ms = os.epoch("utc")
+        realTimeDuration = endTime_ms - startTime_ms
+    until realTimeDuration >= 0
 
-    function receiveTimer()
-        local event = os.pullEvent("redstone")
-        if relay.getInput(config.redstone_pull_side) then
-            ev = event
-        end
-    end
+    local avg_mspt = realTimeDuration / ticks_to_sleep
 
-    if relay ~= nil then
-        relay.setOutput(config.redstone_push_side, true)
-        parallel.waitForAny(receiveTimer, timeoutCheck)
-        relay.setOutput(config.redstone_push_side, false)
-    else
-        error("Relay Offline!")
-    end
-
-    if ev ~= nil then
+    if avg_mspt <= mspt_thres then
         printColored({
-            { "[Good] ",                                      colors.green },
-            { getTimestamp(),                                 colors.gray },
-            { "Server performance: good. MSPT is likely <= ", colors.white },
-            { tostring(mspt_thres),                           colors.blue }
+            { "[Good] ",                               colors.green },
+            { getTimestamp(),                          colors.gray },
+            { "Server performance: good. MSPT is <= ", colors.white },
+            { tostring(mspt_thres),                    colors.blue }
         })
-        return ev
+        return true
     else
         printColored({
-            { "[Bad] ",                                     colors.red },
-            { getTimestamp(),                               colors.gray },
-            { "Server performance: bad. MSPT is likely > ", colors.white },
-            { tostring(mspt_thres),                         colors.blue }
+            { "[Bad] ",                            colors.red },
+            { getTimestamp(),                      colors.gray },
+            { "Server performance: bad. MSPT is ", colors.white },
+            { string.format("%.1f", avg_mspt),     colors.red },
+            { "> ",                                colors.white },
+            { tostring(mspt_thres),                colors.blue }
         })
-        return nil
+        return false
     end
 end
 
@@ -138,9 +129,9 @@ local function dectectLoop()
     while true do
         if status == "ok" then
             -- ------------------- 正常状态 -------------------
-            local result = msptDetector(config.mspt_threshold)
+            local result = msptDetector(config.detect_time, config.mspt_threshold)
 
-            if result ~= nil then
+            if result then
                 consecutive_failures = 0
             else
                 consecutive_failures = 1
@@ -165,9 +156,9 @@ local function dectectLoop()
                 { ". checking...",                colors.white }
             })
 
-            local result = msptDetector(config.mspt_threshold)
+            local result = msptDetector(config.detect_time, config.mspt_threshold)
 
-            if result ~= nil then
+            if result then
                 printColored({
                     { "[RECOVERED] ",                     colors.green },
                     { getTimestamp(),                     colors.gray },
@@ -212,9 +203,9 @@ local function dectectLoop()
             })
             os.sleep(config.severe_check_interval)
 
-            local result = msptDetector(config.mspt_threshold)
+            local result = msptDetector(config.detect_time, config.mspt_threshold)
 
-            if result ~= nil then
+            if result then
                 -- 从严重状态恢复
                 printColored({
                     { "[FULLY RECOVERED] ",               colors.cyan },
@@ -256,11 +247,6 @@ end
 
 config = loadConfig(CONFIG_PATH)
 mon = peripheral.find("monitor") or term
-relay = peripheral.find("redstone_relay") or nil
-
-if relay == nil then
-    error("Relay not found!")
-end
 
 if mon ~= term then
     term.setTextColor(colors.green)
