@@ -2,13 +2,16 @@ local BASE_DIR = shell.getRunningProgram():match("(.*/)") or "/"
 local CONFIG_PATH = fs.combine(BASE_DIR, "msptDetector.cfg")
 local defaultConfig = {
     -- -----时间配置-----
-    mspt_threshold = 50,         -- MSPT 阈值
-    detect_time = 5,             -- 每次检测的持续时间（秒）
-    max_failures = 5,            -- 切换到 "severe" 状态所需的最大连续失败次数
-    normal_check_interval = 5,   -- 正常状态下，每次检测间的间隔（秒）
-    warning_cooldown = 10,       -- 警告状态下，每次重试前的冷却时间（秒）
-    severe_check_interval = 300, -- 严重状态下，每次检测的间隔（5分钟）
+    mspt_threshold = 50,                -- MSPT 阈值
+    detect_time = 5,                    -- 每次检测的持续时间（秒）
+    max_failures = 5,                   -- 切换到 "severe" 状态所需的最大连续失败次数
+    normal_check_interval = 5,          -- 正常状态下，每次检测间的间隔（秒）
+    warning_cooldown = 10,              -- 警告状态下，每次重试前的冷却时间（秒）
+    severe_check_interval = 300,        -- 严重状态下，每次检测的间隔（5分钟）
+    write_speed = "slow",               -- 默认log写入速度为慢（slow/fast）
 }
+local spinner = { "|", "/", "-", "\\" } -- 沙漏计时动画
+local dots = { ".  ", ".. ", "..." }    -- 省略号计时动画
 
 local config = {}
 local mon = nil      -- Monitor
@@ -57,7 +60,8 @@ end
 
 --- 在单行内打印包含多种颜色的文本。
 --- @param segments table 包含 {text, color} 片段的列表。
-local function printColored(segments)
+local function printColored(segments, mode)
+    mode = mode or "slow" -- default slow write
     local oldColor = term.getTextColor()
 
     for _, part in ipairs(segments) do
@@ -66,7 +70,12 @@ local function printColored(segments)
 
         -- 设置颜色并打印
         term.setTextColor(color)
-        term.write(text)
+        if mode == "slow" then
+            textutils.slowWrite(text, 30)
+        else
+            term.write(text)
+        end
+
         if text:match("^%-%d%d:%d%d:%d%d%-$") then
             print()
         end
@@ -74,6 +83,34 @@ local function printColored(segments)
 
     print()
     term.setTextColor(oldColor)
+end
+
+--- 在执行等待时，显示一个带有倒计时和省略号的动画。
+--- @param duration number 等待的总秒数
+local function sleepWithAnimation(duration)
+    local T = duration / 0.5 or 10 --default sleep time
+    local line_x, line_y = term.getCursorPos()
+
+    term.setTextColor(colors.white)
+    term.write("Waiting for next check in ")
+    local i = 1
+    local timer = duration
+    local x, y = term.getCursorPos()
+    for t = 1, T do
+        term.setCursorPos(x, y)
+        term.setTextColor(colors.blue)  -- write timer with blue color
+        term.write(timer)
+        term.setTextColor(colors.white) -- write dots anim with while color
+        term.write(dots[i])
+        i = (i % #dots) + 1
+        if t % 2 == 0 then
+            timer = timer - 1
+        end
+        os.sleep(0.5)
+    end
+
+    term.clearLine()
+    term.setCursorPos(line_x, line_y)
 end
 
 --- 返回当前时间戳
@@ -87,16 +124,36 @@ end
 --- @param mspt_thres number 允许的最高MSPT值。默认50
 --- @return boolean res 如果性能正常，返回true；如果超时，返回 nil
 local function msptDetector(detect_time, mspt_thres)
-    mspt_thres = mspt_thres or 50           -- default mspt threshold
+    mspt_thres = mspt_thres or 50               -- default mspt threshold
     local ticks_to_sleep = detect_time * 20 + 5 -- convert time to ticks, spare 5 ticks
-    local realTimeDuration = 0
+    local realTimeDuration = 0                  -- record real time duration (ms)
+    local line_x, line_y = term.getCursorPos()  -- record first line cursor pos
 
-    repeat
-        local startTime_ms = os.epoch("utc")
-        os.sleep(detect_time)
-        local endTime_ms = os.epoch("utc")
-        realTimeDuration = endTime_ms - startTime_ms
-    until realTimeDuration >= 0
+    local function timerAnimation()
+        term.setTextColor(colors.white)
+        term.write("Checking MSPT ... ")
+        local i = 1
+        local x, y = term.getCursorPos()
+        while true do
+            term.setCursorPos(x, y)
+            term.write(spinner[i])
+            i = (i % #spinner) + 1
+            os.sleep(0.2)
+        end
+    end
+
+    local function timerMeasure()
+        repeat
+            local startTime_ms = os.epoch("utc")
+            os.sleep(detect_time)
+            local endTime_ms = os.epoch("utc")
+            realTimeDuration = endTime_ms - startTime_ms
+        until realTimeDuration >= 0
+    end
+
+    parallel.waitForAny(timerAnimation, timerMeasure)
+    term.clearLine()
+    term.setCursorPos(line_x, line_y)
 
     local avg_mspt = realTimeDuration / ticks_to_sleep
 
@@ -106,7 +163,7 @@ local function msptDetector(detect_time, mspt_thres)
             { getTimestamp(),                          colors.gray },
             { "Server performance: good. MSPT is <= ", colors.white },
             { tostring(mspt_thres),                    colors.blue }
-        })
+        }, config.write_speed)
         return true
     else
         printColored({
@@ -116,7 +173,7 @@ local function msptDetector(detect_time, mspt_thres)
             { string.format("%.1f", avg_mspt),     colors.red },
             { "> ",                                colors.white },
             { tostring(mspt_thres),                colors.blue }
-        })
+        }, config.write_speed)
         return false
     end
 end
@@ -133,6 +190,7 @@ local function dectectLoop()
 
             if result then
                 consecutive_failures = 0
+                sleepWithAnimation(config.normal_check_interval)
             else
                 consecutive_failures = 1
                 status = "warning"
@@ -142,10 +200,9 @@ local function dectectLoop()
                     { "MSPT: bad. Cooldown ",            colors.white },
                     { tostring(config.warning_cooldown), colors.yellow },
                     { "s.",                              colors.white }
-                })
-                os.sleep(config.warning_cooldown)
+                }, config.write_speed)
+                sleepWithAnimation(config.warning_cooldown)
             end
-            os.sleep(config.normal_check_interval)
         elseif status == "warning" then
             -- ------------------- 警告状态 -------------------
             printColored({
@@ -154,7 +211,7 @@ local function dectectLoop()
                 { "Current check times: ",        colors.white },
                 { tostring(consecutive_failures), colors.yellow },
                 { ". checking...",                colors.white }
-            })
+            }, config.write_speed)
 
             local result = msptDetector(config.detect_time, config.mspt_threshold)
 
@@ -163,9 +220,10 @@ local function dectectLoop()
                     { "[RECOVERED] ",                     colors.green },
                     { getTimestamp(),                     colors.gray },
                     { "MSPT return good. Reset monitor.", colors.white }
-                })
+                }, config.write_speed)
                 consecutive_failures = 0
                 status = "ok"
+                sleepWithAnimation(config.normal_check_interval)
             else
                 consecutive_failures = consecutive_failures + 1
                 if consecutive_failures >= config.max_failures then
@@ -178,7 +236,7 @@ local function dectectLoop()
                         { tostring(consecutive_failures), colors.red },
                         { " times. MSPT turn ",           colors.white },
                         { "severe.",                      colors.red }
-                    })
+                    }, config.write_speed)
                 else
                     -- 失败次数未达上限，继续留在 'warning' 状态
                     printColored({
@@ -187,11 +245,10 @@ local function dectectLoop()
                         { "MSPT: bad. Cooldown ",            colors.white },
                         { tostring(config.warning_cooldown), colors.yellow },
                         { "s.",                              colors.white }
-                    })
+                    }, config.write_speed)
                 end
-                os.sleep(config.warning_cooldown)
+                sleepWithAnimation(config.warning_cooldown)
             end
-            os.sleep(config.normal_check_interval)
         elseif status == "severe" then
             -- ------------------- 严重状态 -------------------
             printColored({
@@ -200,8 +257,8 @@ local function dectectLoop()
                 { "MSPT: severe. Next check in ",         colors.white },
                 { tostring(config.severe_check_interval), colors.red },
                 { "s.",                                   colors.white }
-            })
-            os.sleep(config.severe_check_interval)
+            }, config.write_speed)
+            sleepWithAnimation(config.severe_check_interval)
 
             local result = msptDetector(config.detect_time, config.mspt_threshold)
 
@@ -211,11 +268,11 @@ local function dectectLoop()
                     { "[FULLY RECOVERED] ",               colors.cyan },
                     { getTimestamp(),                     colors.gray },
                     { "MSPT return good. Reset monitor.", colors.white }
-                })
+                }, config.write_speed)
                 consecutive_failures = 0
                 status = "ok"
+                sleepWithAnimation(config.normal_check_interval)
             end
-            os.sleep(config.normal_check_interval)
         end
     end
 end
@@ -226,16 +283,12 @@ local function keysHandler()
         if key == keys.q or key == keys.escape then
             if old_term then
                 term.setTextColor(colors.red)
-                print("==== Quit MSPT Detector ====")
+                print("\n==== Quit MSPT Detector ====") -- in case interrupt at animation, spare [Space] here
                 term.redirect(old_term)
-                term.clear()
-                term.setCursorPos(1, 1)
                 term.setTextColor(colors.red)
                 print("==== Quit MSPT Detector ====")
                 term.setTextColor(colors.white)
             else
-                term.clear()
-                term.setCursorPos(1, 1)
                 term.setTextColor(colors.red)
                 print("==== Quit MSPT Detector ====")
                 term.setTextColor(colors.white)
@@ -245,22 +298,24 @@ local function keysHandler()
     end
 end
 
-config = loadConfig(CONFIG_PATH)
-mon = peripheral.find("monitor") or term
+local function main()
+    config = loadConfig(CONFIG_PATH)
+    mon = peripheral.find("monitor") or term
 
-if mon ~= term then
-    term.setTextColor(colors.green)
-    print("==== MSPT Monitor Started. Initializing... ====") -- print at term first
-    term.setTextColor(colors.white)
-    old_term = term.redirect(mon)
-    mon.setTextScale(0.5)
-    mon.setTextColor(colors.green)
-    print("==== MSPT Monitor Started. Initializing... ====")
-    parallel.waitForAny(dectectLoop, keysHandler)
-else
-    mon.clear()
-    mon.setCursorPos(1, 1)
-    mon.setTextColor(colors.green)
-    print("==== MSPT Monitor Started. Initializing... ====")
-    parallel.waitForAny(dectectLoop, keysHandler)
+    if mon ~= term then
+        term.setTextColor(colors.green)
+        print("==== MSPT Monitor Started. Initializing... ====") -- print at term first
+        term.setTextColor(colors.white)
+        old_term = term.redirect(mon)
+        mon.setTextScale(0.5)
+        mon.setTextColor(colors.green)
+        print("\n==== MSPT Monitor Started. Initializing... ====")
+        parallel.waitForAny(dectectLoop, keysHandler)
+    else
+        mon.setTextColor(colors.green)
+        print("\n==== MSPT Monitor Started. Initializing... ====")
+        parallel.waitForAny(dectectLoop, keysHandler)
+    end
 end
+
+main()
