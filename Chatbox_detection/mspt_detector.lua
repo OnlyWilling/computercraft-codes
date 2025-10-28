@@ -113,6 +113,36 @@ local function sleepWithAnimation(duration)
     term.setCursorPos(line_x, line_y)
 end
 
+--- 在监视器右上角更新全局状态指示灯。
+--- @param status string 当前的状态 ("ok", "warning", "severe")
+local function updateStatusIndicator(status)
+    -- 保存当前光标和颜色设置
+    local old_x, old_y = term.getCursorPos()
+    local old_bg = term.getBackgroundColor()
+    local old_fg = term.getTextColor()
+
+    local w, h = term.getSize()
+    local lightColor
+
+    if status == "ok" then
+        lightColor = colors.green
+    elseif status == "warning" then
+        lightColor = colors.yellow
+    else -- severe
+        lightColor = colors.red
+    end
+
+    -- 在右上角绘制一个带背景色的空格作为指示灯
+    term.setCursorPos(w, 1)
+    term.setBackgroundColor(lightColor)
+    term.write(" ")
+
+    -- 恢复光标和颜色
+    term.setCursorPos(old_x, old_y)
+    term.setBackgroundColor(old_bg)
+    term.setTextColor(old_fg)
+end
+
 --- 返回当前时间戳
 --- @return string res 用UTC时分制返回时间戳
 local function getTimestamp()
@@ -183,6 +213,7 @@ end
 local function dectectLoop()
     local status = "ok"
     local consecutive_failures = 0
+    updateStatusIndicator(status) -- init indicator
     while true do
         if status == "ok" then
             -- ------------------- 正常状态 -------------------
@@ -194,6 +225,7 @@ local function dectectLoop()
             else
                 consecutive_failures = 1
                 status = "warning"
+                updateStatusIndicator(status)
                 printColored({
                     { "[WARNING] ",                      colors.yellow },
                     { getTimestamp(),                    colors.gray },
@@ -223,12 +255,14 @@ local function dectectLoop()
                 }, config.write_speed)
                 consecutive_failures = 0
                 status = "ok"
+                updateStatusIndicator(status)
                 sleepWithAnimation(config.normal_check_interval)
             else
                 consecutive_failures = consecutive_failures + 1
                 if consecutive_failures >= config.max_failures then
                     -- 连续失败次数达到上限，进入 'severe' 状态
                     status = "severe"
+                    updateStatusIndicator(status)
                     printColored({
                         { "[SEVERE] ",                    colors.red },
                         { getTimestamp(),                 colors.gray },
@@ -271,6 +305,7 @@ local function dectectLoop()
                 }, config.write_speed)
                 consecutive_failures = 0
                 status = "ok"
+                updateStatusIndicator(status)
                 sleepWithAnimation(config.normal_check_interval)
             end
         end
