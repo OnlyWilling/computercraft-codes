@@ -280,8 +280,8 @@ local function dectectLoop()
                         { tostring(config.warning_cooldown), colors.yellow },
                         { "s.",                              colors.white }
                     }, config.write_speed)
+                    sleepWithAnimation(config.warning_cooldown)
                 end
-                sleepWithAnimation(config.warning_cooldown)
             end
         elseif status == "severe" then
             -- ------------------- 严重状态 -------------------
