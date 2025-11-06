@@ -1,41 +1,4 @@
 -- ===函数区===
-local function parser(bimg_player, args)
-    -- Show help if no arguments
-    if #args == 0 then
-        bimg_player.showHelp()
-        return
-    end
-
-    -- Parse arguments
-    local ok, path, opts = pcall(bimg_player.parseArguments, args)
-    if not ok then
-        printError(path) -- Here path contains the error message
-        bimg_player.showHelp()
-        return
-    elseif not path then
-        return -- User requested help
-    end
-
-    -- Load image
-    local img = nil
-    if opts.isURL then
-        img = bimg_player.loadImageURL(path)
-    else
-        img = bimg_player.loadImageFile(path)
-    end
-
-    -- Check img is not nil
-    if not img then
-        error("Failed to load image from: " .. path)
-        return
-    end
-
-    -- Apply display scale
-    if opts.scale and img.multiMonitor then
-        img.multiMonitor.scale = opts.scale
-    end
-    return opts, img
-end
 
 -- 引入所需的API
 local basalt = require("basalt")
@@ -61,16 +24,18 @@ local ui_window = window.create(term.current(), 1, 1, screenW, ui_height)
 local shell_window = window.create(term.current(), 1, ui_height + 2, screenW, shell_height - 1)
 
 local video_monitor = peripheral.find("monitor") or shell_window
+local BASE_DIR = shell.getRunningProgram():match("(.*/)") or "/"
+local program_file = fs.combine(BASE_DIR, "test.lua")
 local video_file = "demo.bimg"
-local video_player_instance = nil
-local video_coroutine = nil
 
+video_monitor.clear()
+video_monitor.setCursorPos(1, 1)
 video_monitor.write("Monitor Found")
 
 -- 2. 定义UI任务函数
 local function ui_task()
     -- 将所有Basalt的绘制操作重定向到UI窗口
-    local main = basalt.createFrame(ui_window)
+    local main = basalt.createFrame():setTerm(video_monitor)
         :setSize(ui_window.getSize()) -- 设置大小为UI窗口的大小
 
     -- 添加一个标题
@@ -110,36 +75,28 @@ local function ui_task()
         :setSize(20, 3)
         :setText("Play Bimg")
         :onClick(function(self)
-            if video_coroutine then
-                os.queueEvent("bimg_stop")
-                self:setText("Playing...")
-                return
-            end
-
-            video_coroutine = coroutine.create(function()
-                btn3:setText("Stop play")
-                local img = bimg_player.loadImageFile(video_file)
-                local player = bimg_player:create(img, { display = video_monitor, loop = true })
-                local function keysHandler()
-                    while true do
-                        -- 注意：这里监听的是全局事件
-                        local ev, p1 = os.pullEvent()
-                        if ev == "key" then
-                            if p1 == keys.q or p1 == keys.escape then
-                                player.ctrl.stop()
-                            end
-                            -- 当UI按钮被点击时，它会发送这个自定义事件
-                        elseif ev == "bimg_stop" then
-                            player.ctrl.stop()
-                        end
-                    end
-                end
-                parallel.waitForAny(player.run, keysHandler)
-                video_monitor.clear()
-                video_coroutine = nil
-            end)
-            coroutine.resume(video_coroutine)
+            self:setText("Stop Play")
+            local frame = main:addFrame({
+                    x = 2,
+                    y = 2,
+                    width = 28,
+                    height = 10,
+                    title = "Worm Program",
+                    draggable = true,
+                })
+                :setDraggingMap({ { x = 1, y = 1, width = 27, height = 1 } })
+                :onFocus(function(self)
+                    self:prioritize()
+                end)
+            local program = frame:addProgram({
+                    x = 1,
+                    y = 2,
+                    width = 28,
+                    height = 9,
+                })
+                :execute(program_file)
         end)
+
     local btn4 = main:addButton()
         :setPosition(25, 7)
         :setSize(20, 3)
