@@ -25,8 +25,8 @@ local shell_window = window.create(term.current(), 1, ui_height + 2, screenW, sh
 
 local video_monitor = peripheral.find("monitor") or shell_window
 local BASE_DIR = shell.getRunningProgram():match("(.*/)") or "/"
-local program_file = fs.combine(BASE_DIR, "test.lua")
-local video_file = "demo.bimg"
+local program_file = fs.combine(BASE_DIR, "bimg_play_env.lua")
+local video_path = "demo.bimg"
 
 video_monitor.clear()
 video_monitor.setCursorPos(1, 1)
@@ -35,9 +35,12 @@ video_monitor.write("Monitor Found")
 -- 2. 定义UI任务函数
 local function ui_task()
     -- 将所有Basalt的绘制操作重定向到UI窗口
-    local main = basalt.createFrame():setTerm(video_monitor)
+    local main = basalt.createFrame(ui_window)
         :setSize(ui_window.getSize()) -- 设置大小为UI窗口的大小
-
+    local monitor_frame = basalt.createFrame({
+            background = colors.black,
+        }):setTerm(video_monitor)
+        :setSize(video_monitor.getSize())
     -- 添加一个标题
     local label1 = main:addLabel()
         :setText("Bimg Controler")
@@ -75,26 +78,48 @@ local function ui_task()
         :setSize(20, 3)
         :setText("Play Bimg")
         :onClick(function(self)
-            self:setText("Stop Play")
-            local frame = main:addFrame({
-                    x = 2,
-                    y = 2,
-                    width = 28,
-                    height = 10,
-                    title = "Worm Program",
-                    draggable = true,
-                })
-                :setDraggingMap({ { x = 1, y = 1, width = 27, height = 1 } })
-                :onFocus(function(self)
-                    self:prioritize()
-                end)
+            local state = true
+            if state then
+                self:setText("Stop Play")
+            else
+                frame:destroy()
+                self:setText("Play Bimg")
+            end
+            state = not state
+            local frame = monitor_frame:addFrame()
+                :setSize(video_monitor.getSize())
+            local options = {}
+            options.path = video_path
+            options.loop = "-l"
+            -- options.display = peripheral.getName(video_monitor)
+            local bimg_env = setmetatable({}, { __index = _G })
+            bimg_env.bimg_options = options
             local program = frame:addProgram({
-                    x = 1,
                     y = 2,
-                    width = 28,
-                    height = 9,
-                })
-                :execute(program_file)
+                }):setSize(video_monitor.getSize())
+                :execute(program_file, bimg_env)
+                :onDone(function()
+                    frame:destroy()
+                    self:setText("Play Bimg")
+                end)
+            frame:addLabel({
+                x = 2,
+                y = 1,
+                text = "Bimg Player",
+                foreground = colors.lightBlue
+            })
+            frame:addButton({
+                x = monitor_frame.get("width"),
+                y = 1,
+                width = 1,
+                height = 1,
+                text = "X",
+                background = colors.red,
+                foreground = colors.white
+            }):onClick(function()
+                frame:destroy()
+                self:setText("Play Bimg")
+            end)
         end)
 
     local btn4 = main:addButton()

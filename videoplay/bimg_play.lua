@@ -1,19 +1,41 @@
-local function parser(bimg_player, args)
-    -- Show help if no arguments
-    if #args == 0 then
-        bimg_player.showHelp()
-        return
+local function main(...)
+    local bimg_player = require("bimg_player")
+
+    local path = nil
+    local opts = {}
+    if _ENV and type(_ENV.bimg_options) == "table" then
+        -- Method 1: Load from environment table
+        print("bimg_play: Loading options from environment.")
+        opts = _ENV.bimg_options
+        path = opts.path
+
+        if not path then
+            printError("bimg_play Error: 'bimg_options' table found, but 'path' key is missing.")
+            return
+        end
+    else
+        -- Method 2: Load from command-line arguments
+        print("bimg_play: Loading options from command-line arguments.")
+        local args = { ... }
+        if #args == 0 then
+            bimg_player.showHelp()
+            return
+        end
+
+        -- Parse arguments using the library function
+        local ok, parsed_path, parsed_opts = pcall(bimg_player.parseArguments, args)
+        if not ok then
+            printError(parsed_path) -- On error, first return value is the error message
+            bimg_player.showHelp()
+            return
+        elseif not parsed_path then
+            return -- User requested help (--help)
+        end
+        path = parsed_path
+        opts = parsed_opts
     end
 
-    -- Parse arguments
-    local ok, path, opts = pcall(bimg_player.parseArguments, args)
-    if not ok then
-        printError(path) -- Here path contains the error message
-        bimg_player.showHelp()
-        return
-    elseif not path then
-        return -- User requested help
-    end
+    -- --- From this point, the logic is the same regardless of the source ---
 
     -- Load image
     local img = nil
@@ -23,31 +45,20 @@ local function parser(bimg_player, args)
         img = bimg_player.loadImageFile(path)
     end
 
-    -- Check img is not nil
     if not img then
-        error("Failed to load image from: " .. path)
+        printError("bimg_play Error: Failed to load image from: " .. tostring(path))
         return
     end
 
-    -- Apply display scale
+    -- Apply display scale if provided
     if opts.scale and img.multiMonitor then
         img.multiMonitor.scale = opts.scale
     end
-    return opts, img
-end
 
-local function main(...)
-    local args = { ... }
-    local bimg_player = require("bimg_player")
-
-    local opts, img = parser(bimg_player, args)
-
-    if not opts or not img then
-        return
-    end
-
+    -- Create player instance
     local player = bimg_player.create(img, opts)
 
+    -- Keyboard event handler for player controls
     local function keysHandler()
         while true do
             local ev, key = os.pullEvent()
@@ -59,16 +70,23 @@ local function main(...)
                 elseif key == keys.q or key == keys.escape then
                     player.ctrl.stop()
                 end
-            elseif ev == "bimg_stop" then
+            elseif ev == "bimg_pause" then -- Custom event to toggle pause
+                player.ctrl.togglePause()
+            elseif ev == "bimg_stop" then  -- Custom event to stop playback
                 player.ctrl.stop()
             end
         end
     end
 
+    -- Run player and event handler in parallel
     parallel.waitForAny(player.run, keysHandler)
 
     print("Animation finished. Press any key to exit.")
 end
 
 -- Here runs the main
-main(...)
+-- We wrap it in pcall to catch any unexpected errors gracefully
+local ok, err = pcall(main, ...)
+if not ok then
+    printError("[ERROR] A fatal error occurred in bimg_play: " .. tostring(err))
+end
