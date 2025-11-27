@@ -487,13 +487,17 @@ while filledScores < 13 do
             if selectedrow == 0 then
                 selectedcol = ev[2] == keys.right
                 selectedrow = (selectedcol and 1 or 2)
-                while selectedrow <= 7 and scores[selectedcol and 2 or 1][selectedrow].locked do selectedrow =
-                    selectedrow + 1 end
+                while selectedrow <= 7 and scores[selectedcol and 2 or 1][selectedrow].locked do
+                    selectedrow =
+                        selectedrow + 1
+                end
                 if selectedrow > 7 then
                     selectedcol = not selectedcol
                     selectedrow = (selectedcol and 1 or 2)
-                    while selectedrow <= 7 and scores[selectedcol and 2 or 1][selectedrow].locked do selectedrow =
-                        selectedrow + 1 end
+                    while selectedrow <= 7 and scores[selectedcol and 2 or 1][selectedrow].locked do
+                        selectedrow =
+                            selectedrow + 1
+                    end
                     if selectedrow > 7 then selectedrow = 0 end
                 end
             else
@@ -541,7 +545,8 @@ while filledScores < 13 do
         elseif ev[3] >= positions.dice.x and ev[3] < positions.dice.x + 15 and ev[4] >= positions.dice.y and ev[4] < positions.dice.y + 2 and rollsRemaining < 3 and rollsRemaining > 0 then
             click_position_at_dice = math.floor((ev[3] - positions.dice.x) / 3) + 1
             dice[click_position_at_dice].locked = not dice[click_position_at_dice].locked
-            drawDie(positions.dice.x + (click_position_at_dice - 1) * 3, positions.dice.y, dice[click_position_at_dice].value, dice[click_position_at_dice].locked and '4' or '0')
+            drawDie(positions.dice.x + (click_position_at_dice - 1) * 3, positions.dice.y,
+                dice[click_position_at_dice].value, dice[click_position_at_dice].locked and '4' or '0')
         elseif ev[3] >= positions.scores.x and ev[3] < positions.scores.x + 40 and ev[4] >= positions.scores.y and ev[4] < positions.scores.y + 7 and rollsRemaining < 3 then
             local col, row = ev[3] - positions.scores.x >= 20, ev[4] - positions.scores.y + 1
             if selectedcol == col and selectedrow == row and not scores[col and 2 or 1][row].locked then
