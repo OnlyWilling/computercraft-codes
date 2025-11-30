@@ -25,11 +25,14 @@ local img1 = main:addImage({
     })
     :setPosition(1, 1)
     :setSize(51, 19)
+    :setBackground(colors.black)
+    :setForeground(colors.white)
     :onClick(function()
         basalt.stop()
     end)
 
 basalt.run()
+
 term.clear()
 term.setCursorPos(1, 1)
 print("Program terminated.")

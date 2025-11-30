@@ -1,5 +1,6 @@
 local basalt
-local releasePath = "https://raw.githubusercontent.com/Pyroxenium/Basalt2/refs/heads/main/release/basalt.lua"
+local fullPath = "https://raw.githubusercontent.com/Pyroxenium/Basalt2/refs/heads/main/release/basalt-full.lua"
+local corePath = "https://raw.githubusercontent.com/Pyroxenium/Basalt2/refs/heads/main/release/basalt-core.lua"
 local devPath = "https://raw.githubusercontent.com/Pyroxenium/Basalt2/refs/heads/main/src/"
 local configPath = "https://raw.githubusercontent.com/Pyroxenium/Basalt2/refs/heads/main/config.lua"
 local luaLSPath = "https://raw.githubusercontent.com/Pyroxenium/Basalt2/refs/heads/main/BasaltLS.lua"
@@ -24,22 +25,37 @@ if(args[1] == "-h")or(args[1] == "--help")then
     print("Usage: install.lua [options]")
     print("Options:")
     print("  -h, --help        Show this help message")
-    print("  -r, --release     Install the release version")
+    print("  -r, --release     Install the core release version")
+    print("  -f, --full        Install the full release version")
     print("  -d, --dev         Install the dev version")
     return
 end
 
 if(args[1] == "-r")or(args[1] == "--release")then
-    print("Installing release version...")
-    local request = http.get(releasePath)
+    print("Installing core release version...")
+    local request = http.get(corePath)
     if not request then
-        error("Failed to download Basalt")
+        error("Failed to download Basalt Core")
     end
     local file = fs.open(args[2] or "basalt.lua", "w")
     file.write(request.readAll())
     file.close()
     request.close()
-    print("Basalt installed successfully!")
+    print("Basalt Core installed successfully!")
+    return
+end
+
+if(args[1] == "-f")or(args[1] == "--full")then
+    print("Installing full release version...")
+    local request = http.get(fullPath)
+    if not request then
+        error("Failed to download Basalt Full")
+    end
+    local file = fs.open(args[2] or "basalt.lua", "w")
+    file.write(request.readAll())
+    file.close()
+    request.close()
+    print("Basalt Full installed successfully!")
     return
 end
 
@@ -83,7 +99,7 @@ if(args[1] == "-d")or(args[1] == "--dev")then
 end
 
 
-local basaltRequest = http.get(releasePath)
+local basaltRequest = http.get(fullPath)
 if not basaltRequest then
     error("Failed to download Basalt")
 end
@@ -131,7 +147,10 @@ local function getScreenPosition(index)
 end
 
 local function createScreen(index)
-    local screen = main:addFrame(coloring)
+    local screen = main:addScrollFrame(coloring)
+        :setScrollBarBackgroundColor(colors.gray)
+        :setScrollBarBackgroundColor2(colors.black)
+        :setScrollBarColor(colors.lightGray)
         :onScroll(function(self, direction)
             local height = getChildrenHeight(self)
             local scrollOffset = self:getOffsetY()
@@ -235,17 +254,19 @@ installScreen:addLabel(coloring)
 
 local versionDropdown = installScreen:addDropDown()
     :setPosition("{parent.width - self.width - 1}", 4)
-    :setSize(15, 1)
+    :setSize(20, 1)
     :setBackground(colors.black)
     :setForeground(colors.white)
-    :addItem("Release")
+    :addItem("Release (Core)")
+    :addItem("Release (Full)")
     :addItem("Dev")
     :addItem("Custom")
+    :selectItem(1)
 
 local versionDesc = installScreen:addLabel("versionDesc")
     :setWidth("{parent.width - 2}")
     :setAutoSize(false)
-    :setText("The Release version is the most stable and tested version of Basalt. It is recommended for production use.")
+    :setText("The Core version includes only the essential elements and plugins. It's lighter and faster - perfect for most projects!")
     :setPosition(2, 7)
     :setSize("{parent.width - 4}", 3)
     :setBackground(colors.lightGray)
@@ -285,8 +306,14 @@ local installPathInput = installScreen:addInput()
     :setForeground(colors.white)
 
 versionDropdown:onSelect(function(self, index, item)
-    if(item.text == "Release") then
-        versionDesc:setText("The Release version is the most stable and tested version of Basalt. It is recommended for production use.")
+    if(item.text == "Release (Core)") then
+        versionDesc:setText("The Core version includes only the essential elements and plugins. It's lighter and faster - perfect for most projects!")
+        additionalComponents:setVisible(false)
+        luaLSCheckbox:setVisible(false)
+        luaMinifyCheckbox:setVisible(false)
+        singleFileProject:setVisible(false)
+    elseif(item.text == "Release (Full)") then
+        versionDesc:setText("The Full version contains all elements and plugins. Use this if you need advanced or optional components.")
         additionalComponents:setVisible(false)
         luaLSCheckbox:setVisible(false)
         luaMinifyCheckbox:setVisible(false)
@@ -298,7 +325,7 @@ versionDropdown:onSelect(function(self, index, item)
         luaMinifyCheckbox:setVisible(true)
         singleFileProject:setVisible(true)
     else
-        versionDesc:setText("The Dev version is the latest development version of Basalt. It may contain new features and improvements, but it may also have bugs and issues.")
+        versionDesc:setText("The Dev version downloads the complete source code as individual files. Perfect for development and debugging!")
         additionalComponents:setVisible(false)
         luaLSCheckbox:setVisible(false)
         luaMinifyCheckbox:setVisible(false)
@@ -419,9 +446,10 @@ local function updateProgress(progressBar, current, total)
     progressBar:setProgress(math.ceil((current / total) * 100))
 end
 
-local function installRelease(installPath, log, progressBar)
-    logMessage(log, "Installing Release version...")
+local function installRelease(installPath, log, progressBar, isCore)
+    logMessage(log, "Installing Release " .. (isCore and "Core" or "Full") .. " version...")
 
+    local releasePath = isCore and corePath or fullPath
     local request = http.get(releasePath)
     if not request then
         logMessage(log, "Failed to download release version, aborting installation.")
@@ -572,7 +600,7 @@ local function installCustom(installPath, log, progressBar, selectedElements, se
             'local project = {}\n',
             'local loadedProject = {}\n',
             'local baseRequire = require\n',
-            'require = function(path) if(project[path..".lua"])then if(loadedProject[path]==nil)then loadedProject[path] = project[path..".lua"]() end return loadedProject[path] end baseRequire(path) end\n'
+            'require = function(path) if(project[path..".lua"])then if(loadedProject[path]==nil)then loadedProject[path] = project[path..".lua"]() end return loadedProject[path] end return baseRequire(path) end\n'
         }
 
         for filePath, content in pairs(project) do
@@ -642,7 +670,7 @@ local function installBasalt()
     installButton:setVisible(false)
     local selection = versionDropdown:getSelectedItems()[1]
     if(selection==nil)then
-        selection = "Release"
+        selection = "Release (Core)"
     else
         selection = selection.text
     end
@@ -652,8 +680,10 @@ local function installBasalt()
     else
         path = path:gsub(".lua", "")
     end
-    if(selection == "Release")then
-        installRelease(path..".lua", log, progressBar)
+    if(selection == "Release (Core)")then
+        installRelease(path..".lua", log, progressBar, true)
+    elseif(selection == "Release (Full)")then
+        installRelease(path..".lua", log, progressBar, false)
     elseif(selection == "Dev")then
         installDev(path, log, progressBar)
     else
