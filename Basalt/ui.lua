@@ -32,6 +32,7 @@ video_monitor.clear()
 video_monitor.setCursorPos(1, 1)
 video_monitor.write("Monitor Found")
 
+
 -- 2. 定义UI任务函数
 local function ui_task()
     -- 将所有Basalt的绘制操作重定向到UI窗口

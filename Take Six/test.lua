@@ -13,25 +13,41 @@ end
 term.clear()
 term.setCursorPos(1, 1)
 
-local bimg_path = "./bimg/nimmt2.bimg"
+local bimg_path = "./bimg/nimmt5.bimg"
 local bimg_data = loadImageFile(bimg_path)
 
-local main = basalt.createFrame()
+local base_frame = basalt.createFrame()
     :setSize(51, 19)
     :setBackground(colors.black)
 
-local img1 = main:addImage({
+local logo_img = base_frame:addImage({
         bimg = bimg_data,
     })
     :setPosition(1, 1)
-    :setSize(51, 19)
+    :setSize("{parent.width}", "{parent.height}")
+    :applyPalette()
     :setBackground(colors.black)
     :setForeground(colors.white)
     :onClick(function()
         basalt.stop()
     end)
 
-basalt.run()
+local function UI_task()
+    basalt.run()
+end
+
+local function Keyboard_task()
+    while true do
+        local ev, key = os.pullEvent()
+        if ev == "key" then
+            if key == keys.q or key == keys.escape then
+                basalt.stop()
+            end
+        end
+    end
+end
+
+parallel.waitForAny(UI_task, Keyboard_task)
 
 term.clear()
 term.setCursorPos(1, 1)
