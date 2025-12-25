@@ -26,16 +26,16 @@ local MAX_PLAY_PER_TURN = 3
 ----------------------------------------------
 -- 全局状态
 ----------------------------------------------
-local players = {}      -- [seat] = {id, name, alive, hand, bullet_idx, live_bullet}
-local rednet_map = {}   -- [computer_id] → seat
+local players = {}    -- [seat] = {id, name, alive, hand, bullet_idx, live_bullet}
+local rednet_map = {} -- [computer_id] → seat
 
 local gameState = {
-    phase = "LOBBY",     -- LOBBY, ACTION, REVEAL, SHOOT, GAME_OVER
+    phase = "LOBBY", -- LOBBY, ACTION, REVEAL, SHOOT, GAME_OVER
     turn_seat = 1,
     target_card = "",
     table_stack = 0,
-    table_pile = {},     -- 本轮所有出过的牌（用于强制揭示时显示）
-    last_play = nil,     -- 上一次出牌记录
+    table_pile = {}, -- 本轮所有出过的牌（用于强制揭示时显示）
+    last_play = nil, -- 上一次出牌记录
     was_force_round_end = false,
     deadline = 0
 }
@@ -44,21 +44,21 @@ local gameState = {
 -- 工具函数
 ----------------------------------------------
 local function broadcast(type, payload)
-    rednet.broadcast({type = type, payload = payload}, PROTOCOL)
+    rednet.broadcast({ type = type, payload = payload }, PROTOCOL)
 end
 
 local function sendPrivate(seat, type, payload)
     local p = players[seat]
     if p and p.id then
-        rednet.send(p.id, {type = type, payload = payload}, PROTOCOL)
+        rednet.send(p.id, { type = type, payload = payload }, PROTOCOL)
     end
 end
 
 local function generateDeck()
     local deck = {}
-    local types = {"A", "K", "Q", "J", "JK"}
+    local types = { "A", "K", "Q", "J", "JK" }
     for _, t in ipairs(types) do
-        for i=1,4 do table.insert(deck, t) end
+        for i = 1, 4 do table.insert(deck, t) end
     end
     for i = #deck, 2, -1 do
         local j = math.random(i)
@@ -70,26 +70,26 @@ end
 local function dealCards()
     local deck = generateDeck()
     local ptr = 1
-    for seat=1, MAX_PLAYERS do
+    for seat = 1, MAX_PLAYERS do
         if players[seat] and players[seat].alive then
             players[seat].hand = {}
-            for i=1,5 do
+            for i = 1, 5 do
                 table.insert(players[seat].hand, deck[ptr])
                 ptr = ptr + 1
             end
-            sendPrivate(seat, "PRIVATE_HAND", {hand = players[seat].hand})
+            sendPrivate(seat, "PRIVATE_HAND", { hand = players[seat].hand })
         end
     end
 end
 
 local function initRoulette(seat)
     players[seat].bullet_idx = 0
-    players[seat].live_bullet = math.random(1,6)
+    players[seat].live_bullet = math.random(1, 6)
 end
 
 local function getNextAlive(seat)
     local s = seat
-    for _=1,4 do
+    for _ = 1, 4 do
         s = (s % 4) + 1
         if players[s] and players[s].alive then return s end
     end
@@ -100,24 +100,24 @@ end
 local function clearDesk()
     gameState.table_pile = {}
     gameState.table_stack = 0
-    gameState.last_play = nil          -- 必须清空！
+    gameState.last_play = nil -- 必须清空！
 end
 
 local function rollNewTarget()
-    local t = {"A", "K", "Q", "J"}
+    local t = { "A", "K", "Q", "J" }
     gameState.target_card = t[math.random(4)]
 end
 
 local function syncState()
     local summary = {}
-    for seat=1,MAX_PLAYERS do
+    for seat = 1, MAX_PLAYERS do
         local p = players[seat]
         if p then
             summary[seat] = {
                 name = p.name,
                 alive = p.alive,
                 card_count = #p.hand,
-                gun_status = (p.bullet_idx or 0).."/6"
+                gun_status = (p.bullet_idx or 0) .. "/6"
             }
         end
     end
@@ -135,7 +135,7 @@ end
 local function startRound()
     gameState.phase = "ACTION"
     rollNewTarget()
-    clearDesk()                        -- 确保干净
+    clearDesk() -- 确保干净
     gameState.was_force_round_end = false
     gameState.deadline = os.clock() + TIMEOUT_ACTION
     syncState()
@@ -152,7 +152,7 @@ local function executeShooting(victim)
     local isBang = (p.bullet_idx == p.live_bullet) or (p.bullet_idx >= 6)
     local result = isBang and "BANG" or "CLICK"
 
-    broadcast("EVENT_SHOOT", {victim = victim, result = result})
+    broadcast("EVENT_SHOOT", { victim = victim, result = result })
 
     if isBang then
         playSound("entity.generic.explode")
@@ -170,11 +170,13 @@ local function executeShooting(victim)
         local aliveCount = 0
         local winner = ""
         for _, pl in pairs(players) do
-            if pl.alive then aliveCount = aliveCount + 1; winner = pl.name end
+            if pl.alive then
+                aliveCount = aliveCount + 1; winner = pl.name
+            end
         end
 
         if aliveCount <= 1 then
-            broadcast("GAME_OVER", {winner = winner})
+            broadcast("GAME_OVER", { winner = winner })
             gameState.phase = "GAME_OVER"
             syncState()
             playSound("entity.ender_dragon.death")
@@ -182,7 +184,7 @@ local function executeShooting(victim)
         end
 
         -- 有人死 → 重置所有人生还者的轮盘 + 重新发牌
-        for s=1,MAX_PLAYERS do
+        for s = 1, MAX_PLAYERS do
             if players[s] and players[s].alive then
                 initRoulette(s)
             end
@@ -220,10 +222,10 @@ local function gameLoop()
     while true do
         if gameState.phase == "LOBBY" then
             local count = 0
-            for i=1,MAX_PLAYERS do if players[i] then count = count + 1 end end
+            for i = 1, MAX_PLAYERS do if players[i] then count = count + 1 end end
             if count == MAX_PLAYERS then
                 print("All 4 players joined. Game starting!")
-                for s=1,MAX_PLAYERS do initRoulette(s) end
+                for s = 1, MAX_PLAYERS do initRoulette(s) end
                 dealCards()
                 startRound()
             end
@@ -251,23 +253,25 @@ local function netLoop()
             if rednet_map[id] then goto continue end
 
             local seat = nil
-            for s=1,MAX_PLAYERS do
-                if not players[s] then seat = s; break end
+            for s = 1, MAX_PLAYERS do
+                if not players[s] then
+                    seat = s; break
+                end
             end
             if not seat then goto continue end
 
             players[seat] = {
                 id = id,
-                name = "P"..seat,
+                name = "P" .. seat,
                 alive = true,
                 hand = {},
                 bullet_idx = 0,
-                live_bullet = math.random(1,6)
+                live_bullet = math.random(1, 6)
             }
             rednet_map[id] = seat
-            sendPrivate(seat, "JOIN_ACK", {seat = seat})
+            sendPrivate(seat, "JOIN_ACK", { seat = seat })
             syncState()
-            print("Player joined: P"..seat.." (ID:"..id..")")
+            print("Player joined: P" .. seat .. " (ID:" .. id .. ")")
         else
             -- 游戏内操作
             local seat = rednet_map[id]
@@ -282,11 +286,11 @@ local function netLoop()
                 if #cards == 0 then goto continue end
 
                 local toPlay = {}
-                for i=1,math.min(#cards, MAX_PLAY_PER_TURN) do table.insert(toPlay, cards[i]) end
+                for i = 1, math.min(#cards, MAX_PLAY_PER_TURN) do table.insert(toPlay, cards[i]) end
 
                 -- 从手牌移除并加入桌面堆
                 for _, c in ipairs(toPlay) do
-                    for i=#p.hand,1,-1 do
+                    for i = #p.hand, 1, -1 do
                         if p.hand[i] == c then
                             table.remove(p.hand, i)
                             table.insert(gameState.table_pile, c)
@@ -295,9 +299,9 @@ local function netLoop()
                     end
                 end
 
-                sendPrivate(seat, "PRIVATE_HAND", {hand = p.hand})
+                sendPrivate(seat, "PRIVATE_HAND", { hand = p.hand })
 
-                gameState.last_play = {seat = seat, count = #toPlay, cards = toPlay}
+                gameState.last_play = { seat = seat, count = #toPlay, cards = toPlay }
                 gameState.table_stack = gameState.table_stack + #toPlay
 
                 local nextSeat = getNextAlive(seat)
@@ -319,8 +323,10 @@ local function netLoop()
                     sleep(1.5)
 
                     local isLiar = false
-                    for _,c in ipairs(toPlay) do
-                        if c ~= gameState.target_card and c ~= "JK" then isLiar = true; break end
+                    for _, c in ipairs(toPlay) do
+                        if c ~= gameState.target_card and c ~= "JK" then
+                            isLiar = true; break
+                        end
                     end
 
                     broadcast("EVENT_REVEAL", {
@@ -336,19 +342,21 @@ local function netLoop()
                     executeShooting(loser)
                 end
 
-            -- 质疑
+                -- 质疑
             elseif msg.type == "ACTION_LIAR" and gameState.last_play then
                 local prev = gameState.last_play
 
                 playSound("block.bell.use", 1.5)
-                broadcast("EVENT_CALL_LIAR", {challenger = seat})
+                broadcast("EVENT_CALL_LIAR", { challenger = seat })
                 gameState.phase = "REVEAL"
                 gameState.was_force_round_end = false
                 sleep(1.5)
 
                 local isLiar = false
-                for _,c in ipairs(prev.cards) do
-                    if c ~= gameState.target_card and c ~= "JK" then isLiar = true; break end
+                for _, c in ipairs(prev.cards) do
+                    if c ~= gameState.target_card and c ~= "JK" then
+                        isLiar = true; break
+                    end
                 end
 
                 broadcast("EVENT_REVEAL", {

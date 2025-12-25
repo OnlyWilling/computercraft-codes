@@ -1,5 +1,5 @@
 -- game.lua
--- Liar's Bar Client 
+-- Liar's Bar Client
 -- 保持：上家指示下移、选择策略（最多3张，选择第4张自动取消最早选中）、显示每人独立轮盘0/6起
 -- 骗子酒馆游戏客户端 需要无线调制解调器
 -- 主机启动后自动寻找主机
@@ -25,7 +25,7 @@ local C_BTN_LIAR = colors.red
 local gameState = {
     phase = "CONNECTING",
     players = {},
-    round_info = {table_stack=0, target_card="", turn_seat=0},
+    round_info = { table_stack = 0, target_card = "", turn_seat = 0 },
     my_hand = {},
     selected_cards = {}, -- index -> true/false
     selected_order = {}, -- 按选择顺序保存索引（用于自动取消最早选中）
@@ -41,8 +41,8 @@ end
 
 local function drawBox(x, y, w, h, bg)
     term.setBackgroundColor(bg)
-    for i=0, h-1 do
-        term.setCursorPos(x, y+i)
+    for i = 0, h - 1 do
+        term.setCursorPos(x, y + i)
         term.write(string.rep(" ", w))
     end
 end
@@ -55,8 +55,8 @@ local function drawText(x, y, txt, fg, bg)
 end
 
 local function centerTextInBox(x, y, w, h, txt, fg, bg)
-    local cy = y + math.floor(h/2)
-    local cx = x + math.floor((w - #txt)/2)
+    local cy = y + math.floor(h / 2)
+    local cx = x + math.floor((w - #txt) / 2)
     drawText(cx, cy, txt, fg, bg)
 end
 
@@ -66,10 +66,10 @@ local function drawCard(x, y, text, isHidden, isSelected)
     local fg = isHidden and colors.lightGray or colors.black
     drawBox(x, y, 3, 3, bg)
     if isHidden then
-        drawText(x+1, y+1, "?", fg, bg)
+        drawText(x + 1, y + 1, "?", fg, bg)
     else
-        local off = (#text==1) and 1 or 0
-        drawText(x+off, y+1, text, fg, bg)
+        local off = (#text == 1) and 1 or 0
+        drawText(x + off, y + 1, text, fg, bg)
     end
 end
 
@@ -78,7 +78,7 @@ local function drawPlayerArea(seatId, x, y, w, h, isMe)
     local p = gameState.players[seatId]
     if not p then
         drawBox(x, y, w, h, C_BG)
-        drawText(x, y+1, "Waiting...", colors.lightGray, C_BG)
+        drawText(x, y + 1, "Waiting...", colors.lightGray, C_BG)
         return
     end
 
@@ -98,23 +98,23 @@ local function drawPlayerArea(seatId, x, y, w, h, isMe)
     if not p.alive then nameStr = "DEAD" end
     local gunStr = "Gun:(" .. (p.gun_status or "?") .. ")"
 
-    drawText(x+1, y, nameStr, colors.black, bg)
-    drawText(x+w-#gunStr, y, gunStr, colors.red, bg)
+    drawText(x + 1, y, nameStr, colors.black, bg)
+    drawText(x + w - #gunStr, y, gunStr, colors.red, bg)
 
     local startX = x + 1
     local cardY = y + 1
 
     if isMe then
         for i, card in ipairs(gameState.my_hand) do
-            local cx = startX + (i-1)*4
+            local cx = startX + (i - 1) * 4
             if cx + 3 < x + w then
                 drawCard(cx, cardY, card, false, gameState.selected_cards[i])
             end
         end
     else
         local count = p.card_count or 0
-        for i=1, count do
-            local cx = startX + (i-1)*4
+        for i = 1, count do
+            local cx = startX + (i - 1) * 4
             if cx + 3 < x + w then
                 drawCard(cx, cardY, "?", true, false)
             end
@@ -127,7 +127,7 @@ local function drawMainUI()
     if not MY_SEAT then return end
 
     local opponents = {
-        {off=1, y=2}, {off=2, y=7}, {off=3, y=12}
+        { off = 1, y = 2 }, { off = 2, y = 7 }, { off = 3, y = 12 }
     }
     for _, op in ipairs(opponents) do
         local seat = (MY_SEAT + op.off - 1) % 4 + 1
@@ -138,15 +138,15 @@ local function drawMainUI()
 
     local rx = 28
     drawBox(rx, 2, 22, 4, colors.brown)
-    centerTextInBox(rx, 2, 22, 2, "TARGET: "..(gameState.round_info.target_card or "?"), colors.white, colors.brown)
-    centerTextInBox(rx, 4, 22, 2, "POT: "..(gameState.round_info.table_stack or 0), colors.yellow, colors.brown)
+    centerTextInBox(rx, 2, 22, 2, "TARGET: " .. (gameState.round_info.target_card or "?"), colors.white, colors.brown)
+    centerTextInBox(rx, 4, 22, 2, "POT: " .. (gameState.round_info.table_stack or 0), colors.yellow, colors.brown)
 
     -- 上家出牌指示（下移）
     if gameState.last_play then
         local lp = gameState.last_play
         drawText(rx, 12, "<- Last Play:", colors.lightGray, C_BG)
-        for i=1, lp.count do
-            drawCard(rx + (i-1)*4, 13, "?", true, false)
+        for i = 1, lp.count do
+            drawCard(rx + (i - 1) * 4, 13, "?", true, false)
         end
     end
 
@@ -158,8 +158,8 @@ local function drawMainUI()
     drawBox(rx, 16, 10, 3, canPlay and C_BTN_PLAY or colors.gray)
     centerTextInBox(rx, 16, 10, 3, "PLAY", colors.black, canPlay and C_BTN_PLAY or colors.gray)
 
-    drawBox(rx+12, 16, 10, 3, canLiar and C_BTN_LIAR or colors.gray)
-    centerTextInBox(rx+12, 16, 10, 3, "LIAR", colors.white, canLiar and C_BTN_LIAR or colors.gray)
+    drawBox(rx + 12, 16, 10, 3, canLiar and C_BTN_LIAR or colors.gray)
+    centerTextInBox(rx + 12, 16, 10, 3, "LIAR", colors.white, canLiar and C_BTN_LIAR or colors.gray)
 end
 
 -- UI 循环
@@ -177,7 +177,7 @@ end
 
 -- 网络循环
 local function networkLoop()
-    rednet.broadcast({type="JOIN_REQUEST"}, PROTOCOL)
+    rednet.broadcast({ type = "JOIN_REQUEST" }, PROTOCOL)
 
     while true do
         local id, msg = rednet.receive(PROTOCOL)
@@ -187,7 +187,6 @@ local function networkLoop()
             if msg.type == "JOIN_ACK" then
                 MY_SEAT = msg.payload.seat
                 gameState.phase = "LOBBY"
-
             elseif msg.type == "GAME_STATE" then
                 local p = msg.payload
                 gameState.phase = p.phase
@@ -202,34 +201,29 @@ local function networkLoop()
                 if p.phase == "ACTION" then
                     playerOverlays = {}
                 end
-
             elseif msg.type == "PRIVATE_HAND" then
                 gameState.my_hand = msg.payload.hand
                 gameState.selected_cards = {}
                 gameState.selected_order = {}
-
             elseif msg.type == "EVENT_FORCE_REVEAL" then
                 local d = msg.payload
-                playerOverlays[d.emptied_player] = {text="ALL REVEAL", color=C_OVERLAY_WRONG}
+                playerOverlays[d.emptied_player] = { text = "ALL REVEAL", color = C_OVERLAY_WRONG }
                 -- 可扩展：弹窗显示 d.table_cards
-
             elseif msg.type == "EVENT_CALL_LIAR" then
-                playerOverlays[msg.payload.challenger] = {text="^ LIAR ^", color=C_OVERLAY_LIAR}
-
+                playerOverlays[msg.payload.challenger] = { text = "^ LIAR ^", color = C_OVERLAY_LIAR }
             elseif msg.type == "EVENT_REVEAL" then
                 local p = msg.payload
                 if p.is_liar then
-                    playerOverlays[p.victim] = {text="CAUGHT!", color=C_OVERLAY_WRONG}
-                    playerOverlays[p.challenger] = {text="CORRECT", color=C_OVERLAY_TRUTH}
+                    playerOverlays[p.victim] = { text = "CAUGHT!", color = C_OVERLAY_WRONG }
+                    playerOverlays[p.challenger] = { text = "CORRECT", color = C_OVERLAY_TRUTH }
                 else
-                    playerOverlays[p.victim] = {text="TRUTH", color=C_OVERLAY_TRUTH}
-                    playerOverlays[p.challenger] = {text="WRONG", color=C_OVERLAY_WRONG}
+                    playerOverlays[p.victim] = { text = "TRUTH", color = C_OVERLAY_TRUTH }
+                    playerOverlays[p.challenger] = { text = "WRONG", color = C_OVERLAY_WRONG }
                 end
-
             elseif msg.type == "EVENT_SHOOT" then
                 local txt = (msg.payload.result == "BANG") and "BANG!!!" or "*CLICK*"
                 local col = (msg.payload.result == "BANG") and colors.red or colors.lightGray
-                playerOverlays[msg.payload.victim] = {text=txt, color=col}
+                playerOverlays[msg.payload.victim] = { text = txt, color = col }
             end
         end
     end
@@ -246,11 +240,11 @@ local function inputLoop()
             -- 选牌区域 (Y=17..19)
             if canAct and y >= 17 and y <= 19 and x >= 3 and x <= 26 then
                 local idx = math.floor((x - 3) / 4) + 1
-                if idx >=1 and idx <= #gameState.my_hand then
+                if idx >= 1 and idx <= #gameState.my_hand then
                     if gameState.selected_cards[idx] then
                         -- 取消选中
                         gameState.selected_cards[idx] = nil
-                        for i=1, #gameState.selected_order do
+                        for i = 1, #gameState.selected_order do
                             if gameState.selected_order[i] == idx then
                                 table.remove(gameState.selected_order, i)
                                 break
@@ -274,14 +268,14 @@ local function inputLoop()
                 -- PLAY (28..37)
                 if x >= 28 and x <= 37 then
                     local toSend = {}
-                    for i=1, math.min(3, #gameState.selected_order) do
+                    for i = 1, math.min(3, #gameState.selected_order) do
                         local idx = gameState.selected_order[i]
                         if idx and gameState.my_hand[idx] then
                             table.insert(toSend, gameState.my_hand[idx])
                         end
                     end
                     if #toSend > 0 then
-                        rednet.send(SERVER_ID, {type="ACTION_PLAY", payload={cards=toSend}}, PROTOCOL)
+                        rednet.send(SERVER_ID, { type = "ACTION_PLAY", payload = { cards = toSend } }, PROTOCOL)
                         -- 发送后清空本地选中（等待服务器 PRIVATE_HAND 更新）
                         gameState.selected_cards = {}
                         gameState.selected_order = {}
@@ -290,7 +284,7 @@ local function inputLoop()
 
                 -- LIAR (40..49)
                 if x >= 40 and x <= 49 and gameState.round_info.table_stack > 0 then
-                    rednet.send(SERVER_ID, {type="ACTION_LIAR", payload={}}, PROTOCOL)
+                    rednet.send(SERVER_ID, { type = "ACTION_LIAR", payload = {} }, PROTOCOL)
                 end
             end
         end

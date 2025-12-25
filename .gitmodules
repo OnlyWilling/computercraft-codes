@@ -1,0 +1,6 @@
+[submodule "Morefonts"]
+	path = Morefonts
+	url = https://github.com/michielp1807/more-fonts.git
+[submodule "Boredbutton"]
+	path = Boredbutton
+	url = https://github.com/michielp1807/CC-Bored-Button.git
