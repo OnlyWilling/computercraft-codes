@@ -1,14 +1,9 @@
-local modem = peripheral.find("modem")
-if not modem then error("No Wireless Modem found") end
-rednet.open(peripheral.getName(modem))
-rednet.host(PROTOCOL, "NIMMT_SERVER")
-print("Server registered as 'NIMMT_SERVER'")
-
 ----------------------------------------------
 -- 配置与状态
 ----------------------------------------------
 local PROTOCOL = "NIMMT"
-local MAX_PLAYERS = 7 -- 牛头王支持 2-10 人，这里设7
+local MAX_PLAYERS = 7    -- 牛头王支持 2-10 人，这里设7
+local MAX_BULLHEADS = 66 -- 默认模式最大吃墩牛头数
 local gameState = {
     phase = "LOBBY",
     host_id = nil,             -- 房主ID (第一个加入的人)
@@ -63,6 +58,27 @@ local function hasCard(hand, cardVal)
     return nil
 end
 
+-- 开启新的一轮（重新发牌）
+local function startNewRound()
+    print("Starting NEW ROUND...")
+    local deck = generateDeck()
+
+    -- 重置桌面
+    gameState.rows = { { table.remove(deck) }, { table.remove(deck) }, { table.remove(deck) }, { table.remove(deck) } }
+
+    -- 重新发牌
+    for pid, p in pairs(gameState.players) do
+        p.hand = {}
+        for i = 1, 10 do table.insert(p.hand, table.remove(deck)) end
+        rednet.send(pid, { type = "DEAL_HAND", hand = p.hand }, PROTOCOL)
+    end
+
+    gameState.phase = "SELECTION"
+    -- 广播包含 "roundReset=true" 告诉客户端清空上一轮的显示
+    rednet.broadcast({ type = "GAME_START", rows = gameState.rows, roundReset = true }, PROTOCOL)
+    rednet.broadcast({ type = "TOAST", msg = "--- NEW ROUND STARTED ---" }, PROTOCOL)
+end
+
 ----------------------------------------------
 -- 核心逻辑：放置牌的算法 (牛头王精髓)
 ----------------------------------------------
@@ -70,14 +86,29 @@ local function resolveTurn()
     if #gameState.turn_cards == 0 then
         -- 广播更新后的桌面
         rednet.broadcast({ type = "UPDATE_BOARD", rows = gameState.rows }, PROTOCOL)
-        sleep(1) -- 展示最终结果
+        os.sleep(1) -- 展示最终结果
 
         local anyPlayerID = next(gameState.players)
         if anyPlayerID and #gameState.players[anyPlayerID].hand == 0 then
-            print("Round finished! Calculation scores...")
+            print("Round Over. Checking scores...")
             gameState.phase = "ROUND_OVER"
-            -- 这里未来可以写：重置桌面、重新发牌、计算总分等
-            -- rednet.broadcast({ type = "ROUND_END" }, PROTOCOL)
+            local isGameOver = false
+            local scores = {}
+            for pid, p in pairs(gameState.players) do
+                table.insert(scores, { id = pid, score = p.score })
+                if p.score >= MAX_BULLHEADS then isGameOver = true end
+            end
+
+            -- 广播当前分数榜
+            rednet.broadcast({ type = "SCORE_UPDATE", scores = scores }, PROTOCOL)
+            os.sleep(3) -- 展示分数
+
+            if isGameOver then
+                rednet.broadcast({ type = "GAME_OVER", scores = scores }, PROTOCOL)
+                print("Game Over triggered.")
+            else
+                startNewRound() -- 分数没爆，继续下一轮
+            end
         else
             gameState.phase = "SELECTION" -- 还有牌，继续下一轮
             rednet.broadcast({ type = "NEW_TURN" }, PROTOCOL)
@@ -87,7 +118,7 @@ local function resolveTurn()
 
     local currentPlay = gameState.turn_cards[1]
     local card = currentPlay.card
-    local playerID = currentPlay.id
+    local pid = currentPlay.id
 
     -- 寻找最合适的行
     local bestRowIndex = -1
@@ -109,14 +140,15 @@ local function resolveTurn()
     -- 情况A: 牌比所有行的最后一张都小
     if bestRowIndex == -1 then
         gameState.phase = "WAITING_CHOICE"
-        gameState.blocking_player = playerID
+        gameState.blocking_player = pid
         gameState.blocking_card = card
-        print("Card too small, strictly logic required here.")
-        rednet.send(playerID, {
+        print("Waiting for Player " .. pid .. " to choose row...")
+        rednet.send(pid, {
             type = "REQUEST_ROW_CHOICE",
             card = card,
             rows = gameState.rows -- 把当前残局发给他参考
         }, PROTOCOL)
+        rednet.broadcast({ type = "WAITING_STATUS", targetID = pid }, PROTOCOL)
         return
     else -- 情况B: 正常接牌
         local targetRow = gameState.rows[bestRowIndex]
@@ -146,9 +178,6 @@ end
 ----------------------------------------------
 -- 网络循环
 ----------------------------------------------
-print("Server started on ID: " .. os.getComputerID())
-print("Waiting for Host to START...")
-
 local function net_loop()
     while true do
         local id, msg = rednet.receive(PROTOCOL)
@@ -174,21 +203,7 @@ local function net_loop()
         elseif msg.type == "START" and gameState.phase == "LOBBY" then
             if id == gameState.host_id then
                 print("Host started the game!")
-                local deck = generateDeck()
-
-                -- 初始化桌面4行，每行随机放一张
-                gameState.rows = { { table.remove(deck) }, { table.remove(deck) }, { table.remove(deck) }, { table.remove(deck) } }
-
-                -- 发牌 (每人10张)
-                for pid, p in pairs(gameState.players) do
-                    p.hand = {}
-                    for i = 1, 10 do table.insert(p.hand, table.remove(deck)) end
-                    -- 发送手牌给个人
-                    rednet.send(pid, { type = "DEAL_HAND", hand = p.hand }, PROTOCOL)
-                end
-
-                gameState.phase = "SELECTION"
-                rednet.broadcast({ type = "GAME_START", rows = gameState.rows }, PROTOCOL)
+                startNewRound()
             else
                 rednet.send(id, { type = "ERROR", msg = "Only Host can start" }, PROTOCOL)
             end
@@ -201,7 +216,7 @@ local function net_loop()
                 print("Player " .. id .. " tried to cheat with card " .. card)
                 return
             end
-            gameState.turn_selections[id] = card -- 存入 Map，重复发送会自动覆盖旧的
+
             if gameState.turn_selections[id] ~= nil then
                 print("Player " .. id .. " changed selection to " .. card)
                 rednet.send(id, {
@@ -211,6 +226,8 @@ local function net_loop()
             else
                 print("Player " .. id .. " selected " .. card)
             end
+
+            gameState.turn_selections[id] = card -- 存入 Map，重复发送会自动覆盖旧的
             -- 检查是否所有人都出牌了
             local readyCount = 0
             for _ in pairs(gameState.turn_selections) do readyCount = readyCount + 1 end
@@ -234,6 +251,8 @@ local function net_loop()
                 end
                 gameState.turn_selections = {}
                 table.sort(gameState.turn_cards, function(a, b) return a.card < b.card end)
+                rednet.broadcast({ type = "TURN_SUMMARY", cards = gameState.turn_cards }, PROTOCOL)
+                os.sleep(1.5) -- 稍微停顿让玩家看清大家出了什么
                 resolveTurn() -- 结算本轮
             end
         elseif msg.type == "CHOOSE_ROW" and gameState.phase == "WAITING_CHOICE" then
@@ -260,5 +279,13 @@ local function net_loop()
         end
     end
 end
+
+local modem = peripheral.find("modem")
+if not modem then error("No Wireless Modem found") end
+rednet.open(peripheral.getName(modem))
+rednet.host(PROTOCOL, "NIMMT_SERVER")
+print("Server registered as 'NIMMT_SERVER'")
+print("Server started on ID: " .. os.getComputerID())
+print("Waiting for Host to START...")
 
 net_loop()

@@ -2,6 +2,7 @@ local modem = peripheral.find("modem")
 if not modem then error("No Wireless Modem found") end
 rednet.open(peripheral.getName(modem))
 
+local utils = require("utils")
 local PROTOCOL = "NIMMT"
 local CONFIG_FILE = shell.resolve(".nimmt_config") -- 隐藏文件，存储配置
 local SERVER_ID = nil                              -- 运行可以先广播寻找服务器，或者手动输入
@@ -17,66 +18,30 @@ local config = {
     lastServerID = nil
 }
 
-local function saveConfig(configTable, path)
-    local file = fs.open(path, "w")
-    if file then
-        file.write(textutils.serialize(configTable))
-        file.close()
-        return true
-    else
-        printError("Error: Cannot write " .. path)
-        return false
-    end
-end
-
--- 加载配置
-local function loadConfig()
-    if fs.exists(CONFIG_FILE) then
-        local file, err_open = fs.open(CONFIG_FILE, "r")
-        if not file then
-            printError("Error: Cannot open " .. err_open)
-            printError("Use default config...")
-            return default_config
-        end
-        local data = textutils.unserialize(file.readAll())
-        file.close()
-        print("Loading config from " .. CONFIG_FILE)
-        return data
-    else
-        print("Config not found. Create default config...")
-        saveConfig(default_config, CONFIG_FILE)
-        return default_config
-    end
-end
-
 local function findServer()
     term.clear()
     term.setCursorPos(1, 1)
     print("Looking for '6 Nimmt!' Server...")
 
-    -- 1. 尝试通过 Rednet DNS 查找
-    -- lookup 返回一个列表 {id1, id2...}，我们取第一个
     local id = rednet.lookup(PROTOCOL, "NIMMT_SERVER")
-
     if id then
         print("Auto-detected Server ID: " .. id)
         return id
     end
 
-    -- 2. 如果没找到，检查是否有上次存的 ID
+    config = utils.loadConfig(default_config, CONFIG_FILE)
     if config.lastServerID then
         print("No server broadcast found.")
-        write("Use last known ID " .. config.lastServerID .. "? (Y/n): ")
-        local input = read()
+        term.write("Use last known ID " .. config.lastServerID .. "? (Y/n): ")
+        local input = term.read()
         if input == "" or input:lower() == "y" then
             return config.lastServerID
         end
     end
 
-    -- 3. 彻底找不到，手动输入
     print("Could not find server automatically.")
-    write("Please enter Server ID manually: ")
-    return tonumber(read())
+    term.write("Please enter Server ID manually: ")
+    return tonumber(term.read())
 end
 
 ----------------------------------------------
@@ -89,9 +54,9 @@ print("--- 6 Nimmt! Client ---")
 SERVER_ID = findServer()
 if SERVER_ID then
     config.lastServerID = SERVER_ID
-    saveConfig(config, CONFIG_FILE)
+    utils.saveConfig(config, CONFIG_FILE)
 else
-    error("Invalid Server ID")
+    error("Server Not Found!")
 end
 
 print("Connecting to ID: " .. SERVER_ID .. "...")
@@ -102,15 +67,18 @@ rednet.send(SERVER_ID, { type = "JOIN" }, PROTOCOL)
 ----------------------------------------------
 local myHand = {}                    -- 当前玩家手牌
 local tableRows = { {}, {}, {}, {} } -- 牌局四行情况
+local turnCards = {}                 -- 本轮展示的牌
 local selectedHandIdx = 1            -- 选中牌的编号
 local selectedRowIdx = 1             -- 选行光标 (1-4)
 local stagedCard = nil               -- 当前选中卡牌
 -- 状态枚举: "LOBBY", "PLAYING", "ROW_SELECT", "GAME_OVER"
 local gamePhase = "LOBBY"
 local isHost = false
+local isLocked = false -- 是否锁定了出牌
 local lobbyCount = 1
 local toastMsg = ""
 local toastTimer = 0
+local waitingTarget = nil -- 当前正在等待谁选行
 
 ----------------------------------------------
 -- UI 绘制系统
@@ -146,9 +114,28 @@ local function drawLobby()
 end
 
 local function drawGame()
-    -- 1. 绘制桌面 4 行
+    -- 1. 绘制回合出牌历史 (顶部)
+    term.setCursorPos(1, 2)
+    term.setTextColor(colors.gray)
+    term.write("Turn: ")
+    for _, entry in ipairs(turnCards) do
+        term.setTextColor(colors.white)
+        term.write(entry.card)
+        term.setTextColor(colors.cyan)
+        term.write("(" .. entry.id .. ") ")
+    end
+
+    -- 2. 绘制等待信息
+    if waitingTarget then
+        term.setCursorPos(1, 3)
+        term.setTextColor(colors.magenta)
+        term.clearLine()
+        term.write(">>> Waiting for Player " .. waitingTarget .. " to choose row... <<<")
+    end
+
+    -- 3. 绘制桌面 4 行
     for i = 1, 4 do
-        term.setCursorPos(2, 3 + i)
+        term.setCursorPos(2, 5 + i)
         term.clearLine()
 
         -- 如果正在选行模式，高亮选中的行
@@ -166,27 +153,32 @@ local function drawGame()
         end
     end
 
-    -- 2. 绘制提示信息
-    term.setCursorPos(1, 10)
+    -- 4. 绘制提示信息
+    term.setCursorPos(1, 12)
     term.clearLine()
     if gamePhase == "ROW_SELECT" then
         term.setTextColor(colors.red)
         print("!!! CARD TOO SMALL !!! Select a row to eat (UP/DOWN + ENTER)")
     elseif gamePhase == "PLAYING" then
-        term.setTextColor(colors.lightBlue)
-        print("Your Hand (LEFT/RIGHT + ENTER):")
+        if isLocked then
+            term.setTextColor(colors.green)
+            print("Card sent! Waiting for others... (Backspace to withdraw)")
+        else
+            term.setTextColor(colors.lightBlue)
+            print("Your Hand (LEFT/RIGHT + ENTER):")
+        end
     end
     term.setTextColor(colors.white)
 
-    -- 3. 绘制手牌
-    term.setCursorPos(1, 12)
+    -- 5. 绘制手牌
+    term.setCursorPos(1, 14)
     term.clearLine()
     for i, card in ipairs(myHand) do
         if gamePhase == "PLAYING" then
             if card == stagedCard then
                 term.setTextColor(colors.green) -- 已选中的牌显示绿色
                 term.write("[" .. card .. "] ")
-            elseif i == selectedHandIdx then
+            elseif i == selectedHandIdx and not isLocked then
                 term.setTextColor(colors.yellow)
                 term.write(">" .. card .. "< ")
             else
@@ -235,6 +227,10 @@ local function net_loop()
             elseif msg.type == "GAME_START" then
                 gamePhase = "PLAYING"
                 tableRows = msg.rows
+                if msg.roundReset then
+                    turnCards = {} -- 新一轮清空历史
+                    waitingTarget = nil
+                end
                 drawUI()
             elseif msg.type == "DEAL_HAND" or msg.type == "UPDATE_HAND" then
                 myHand = msg.hand
@@ -242,19 +238,36 @@ local function net_loop()
                 -- 修正光标防止越界
                 if selectedHandIdx > #myHand then selectedHandIdx = math.max(1, #myHand) end
                 drawUI()
+            elseif msg.type == "TURN_SUMMARY" then
+                turnCards = msg.cards -- 接收服务器发来的排序好的出牌列表
+                stagedCard = nil      -- 结算开始了，清除自己的预选标记
+                isLocked = false      -- 解锁状态
+                drawUI()
             elseif msg.type == "UPDATE_BOARD" then
                 tableRows = msg.rows
+                drawUI()
+            elseif msg.type == "SCORE_UPDATE" then
+                -- 可以在这里做一个弹窗显示分数，目前简化为Toast
+                toastMsg = "Scores updated!"
+                toastTimer = 5
+                drawUI()
+            elseif msg.type == "WAITING_STATUS" then
+                waitingTarget = msg.targetID
                 drawUI()
                 -- [选行逻辑]
             elseif msg.type == "REQUEST_ROW_CHOICE" then
                 gamePhase = "ROW_SELECT"
                 tableRows = msg.rows -- 更新一下残局
+                waitingTarget = nil  -- 既然轮到我了，就不用显示等待别人了
                 selectedRowIdx = 1
                 drawUI()
                 -- [新回合/结束]
             elseif msg.type == "NEW_TURN" then
                 gamePhase = "PLAYING" -- 恢复出牌模式
+                isLocked = false
                 stagedCard = nil
+                turnCards = {} -- 清空上一回合的出牌展示
+                waitingTarget = nil
                 drawUI()
             elseif msg.type == "ROUND_OVER" then
                 gamePhase = "ROUND_OVER"
@@ -292,19 +305,28 @@ local function input_loop()
             end
             -- [阶段 B] 正常出牌
         elseif gamePhase == "PLAYING" then
-            if key == keys.left and selectedHandIdx > 1 then
-                selectedHandIdx = selectedHandIdx - 1
-                drawUI()
-            elseif key == keys.right and selectedHandIdx < #myHand then
-                selectedHandIdx = selectedHandIdx + 1
-                drawUI()
-            elseif key == keys.enter and #myHand > 0 then
-                local card = myHand[selectedHandIdx]
-                stagedCard = card
-                rednet.send(SERVER_ID, { type = "PLAY_CARD", card = card }, PROTOCOL)
-                toastMsg = "Sent card " .. card .. "..."
-                toastTimer = 2
-                drawUI()
+            if isLocked then
+                if key == keys.backspace then
+                    isLocked = false
+                    stagedCard = nil
+                    drawUI()
+                end
+            else
+                if key == keys.left and selectedHandIdx > 1 then
+                    selectedHandIdx = selectedHandIdx - 1
+                    drawUI()
+                elseif key == keys.right and selectedHandIdx < #myHand then
+                    selectedHandIdx = selectedHandIdx + 1
+                    drawUI()
+                elseif key == keys.enter and #myHand > 0 then
+                    local card = myHand[selectedHandIdx]
+                    stagedCard = card
+                    isLocked = true -- 锁定操作
+                    rednet.send(SERVER_ID, { type = "PLAY_CARD", card = card }, PROTOCOL)
+                    toastMsg = "Sent card " .. card .. "..."
+                    toastTimer = 2
+                    drawUI()
+                end
             end
             -- [阶段 C] 强制选行
         elseif gamePhase == "ROW_SELECT" then
