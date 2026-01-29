@@ -17,7 +17,7 @@ local config = { lastServerID = nil }
 local function findServer()
     term.clear()
     term.setCursorPos(1, 1)
-    print("Looking for '6 Nimmt!' Server...")
+    print("Looking for [6 Nimmt] Server...")
 
     local id = rednet.lookup(PROTOCOL, "NIMMT_SERVER")
     if id then
@@ -84,17 +84,65 @@ local gameState = {
 -------------------------------------------------------------------------
 -- Basalt UI 布局构建
 -------------------------------------------------------------------------
-local main = basalt.createFrame()
+
+-- [大厅界面层级结构]
+-- title: 标题文本栏
+-- buttonArea: 按钮选项区
+local lobbyFrame = basalt.createFrame()
     :setForeground(colors.white):setBackground(colors.black)
 
--- [层级结构]
+local title = lobbyFrame:addLabel()
+    :setPosition("{parent.width / 2 - 4}", 2)
+
+lobbyFrame:addLabel():setText("Server ID:"):setPosition(4, 6)
+local inputServer = lobbyFrame:addInput({
+        placeholder = "Room ID",
+        placeholderColor = colors.gray,
+    })
+    :setPosition(15, 6):setSize(10, 1)
+    :setBackground(colors.black):setForeground(colors.white)
+
+local lblStatus = lobbyFrame:addLabel()
+    :setPosition("parent.w / 2 - 10", 10)
+    :setForeground(colors.lightGray)
+    :setText("Status: Not Connected")
+
+local btnJoin = lobbyFrame:addButton()
+    :setPosition("parent.w / 2 - 8", 12):setSize(16, 3)
+    :setBackground(colors.blue)
+    :setText("Join Room")
+    :onClick(function()
+        local sID = tonumber(inputServer:getValue())
+        if not sID then
+            showToast("Invalid Server ID", 2, colors.red)
+            return
+        end
+        SERVER_ID = sID
+        rednet.send(SERVER_ID, { type = "JOIN_ROOM" }, PROTOCOL)
+        lblStatus:setText("Status: Connecting...")
+    end)
+
+-- 开始游戏按钮 (仅房主可见，默认隐藏)
+local btnStartGame = lobbyFrame:addButton()
+    :setText("START GAME")
+    :setPosition("parent.w / 2 - 8", 16)
+    :setSize(16, 3)
+    :setBackground(colors.green)
+    :hide()
+    :onClick(function()
+        rednet.send(SERVER_ID, { type = "START_GAME" }, PROTOCOL)
+    end)
+
+-- [游戏界面层级结构]
 -- header: 顶部信息栏
 -- boardArea: 中间游戏区 (显示4行)
 -- infoArea: 也就是TurnCards，显示本轮出牌
 -- handArea: 底部手牌区
+local gameFrame = basalt.createFrame()
+    :setForeground(colors.white):setBackground(colors.black)
 
-local header = main:addFrame()
-    :setPosition(1, 1):setSize("{parent.width}", 3)
+local header = gameFrame:addFrame()
+    :setPosition(1, 1):setSize("{parent.width}", 1)
     :setBackground(colors.blue)
 
 local titleLabel = header:addLabel()
@@ -107,18 +155,18 @@ local statusLabel = header:addLabel()
     :setForeground(colors.yellow)
     :setText("Phase: LOBBY")
 
-local boardArea = main:addFrame()
+local boardArea = gameFrame:addFrame()
     :setPosition(1, 8):setSize("{parent.width}", 12)
     :setBackground(colors.black)
 
-local infoArea = main:addFrame()
+local infoArea = gameFrame:addFrame()
     :setPosition(1, 4):setSize("{parent.width}", 4)
     :setBackground(colors.gray)
 local infoLbl = infoArea:addLabel()
     :setPosition(2, 2)
     :setText("Turn Cards:")
 
-local handArea = main:addFrame()
+local handArea = gameFrame:addFrame()
     :setPosition(1, "{parent.height - 5}"):setSize("{parent.width}", 6)
     :setBackground(colors.black)
 local handLbl = handArea:addLabel()
@@ -126,7 +174,7 @@ local handLbl = handArea:addLabel()
     :setText("Your Hand:")
 
 -- 消息提示框 (Toast / Modal)
-local toastFrame = main:addFrame({ visible = false })
+local toastFrame = gameFrame:addFrame({ visible = false })
     :setPosition("{parent.width / 2 - 15}", "{parent.height / 2 - 2}"):setZ(10):setSize(30, 5)
     :setBackground(colors.red)
 local toastLabel = toastFrame:addLabel()
@@ -148,6 +196,13 @@ local function showToast(msg, duration, color)
         os.sleep(duration or 2)
         toastFrame.visible = false
     end)
+end
+
+-- 切换界面至游戏界面
+local function switchToGame()
+    lobbyFrame.visible = false
+    gameFrame.visible = true
+    showToast("Game Started!", 2, colors.green)
 end
 
 -- 绘制一张卡牌 (Card Widget)
@@ -287,12 +342,13 @@ local handlers = {}
 handlers["LOBBY_UPDATE"] = function(msg)
     gameState.lobbyCount = msg.count
     titleLabel:setText("Room Players: " .. msg.count)
-    if msg.isHost then
+    if gameState.isHost then
         -- 如果是房主，显示开始按钮
         local startBtn = header:addButton():setPosition("{parent.width - 10}", 1):setSize(8, 3)
             :setText("START"):setBackground(colors.green)
-            :onClick(function()
+            :onClick(function(self)
                 rednet.send(SERVER_ID, { type = "START" }, PROTOCOL)
+                self:destroy()
             end)
     end
 end
@@ -373,6 +429,7 @@ basalt.onEvent("rednet_message", function(event, senderID, msg, protocol)
     if senderID == SERVER_ID and protocol == PROTOCOL then
         local func = handlers[msg.type]
         if func then
+            titleLabel:setText("Roger")
             func(msg)
         else
             -- 未知的消息类型，可以在开发时打印日志
