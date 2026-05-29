@@ -2,245 +2,264 @@ local modem = peripheral.find("modem")
 if not modem then error("No Wireless Modem found") end
 rednet.open(peripheral.getName(modem))
 
-local utils = require("utils")
+local utils  = require("utils")
+local core   = require("nimmt_core")
 local basalt = require("basalt")
-local PROTOCOL = "NIMMT"
-local CONFIG_FILE = shell.resolve(".nimmt_config") -- 隐藏文件，存储配置
-local SERVER_ID = nil                              -- 运行可以先广播寻找服务器，或者手动输入
 
-----------------------------------------------
--- 配置文件管理系统
-----------------------------------------------
+local PROTOCOL    = "NIMMT"
+local CONFIG_FILE = shell.resolve(".nimmt_config")
+local SERVER_ID   = nil
+
 local default_config = { lastServerID = nil }
-local config = { lastServerID = nil }
+local config = utils.loadConfig(default_config, CONFIG_FILE)
 
-local function findServer()
-    term.clear()
-    term.setCursorPos(1, 1)
-    print("Looking for [6 Nimmt] Server...")
-
-    local id = rednet.lookup(PROTOCOL, "NIMMT_SERVER")
-    if id then
-        print("Auto-detected Server ID: " .. id)
-        return id
-    end
-
-    config = utils.loadConfig(default_config, CONFIG_FILE)
-    if config.lastServerID then
-        print("No server broadcast found.")
-        term.write("Use last known ID " .. config.lastServerID .. "? (Y/n): ")
-        local input = term.read()
-        if input == "" or input:lower() == "y" then
-            return config.lastServerID
-        end
-    end
-
-    print("Could not find server automatically.")
-    term.write("Please enter Server ID manually: ")
-    return tonumber(term.read())
-end
-
-----------------------------------------------
--- 初始化自组网
-----------------------------------------------
-term.clear()
-term.setCursorPos(1, 1)
-print("--- 6 Nimmt! Client ---")
--- 执行查找
-SERVER_ID = findServer()
-if SERVER_ID then
-    config.lastServerID = SERVER_ID
-    utils.saveConfig(config, CONFIG_FILE)
-else
-    error("Server Not Found!")
-end
-
-print("Connecting to ID: " .. SERVER_ID .. "...")
-rednet.send(SERVER_ID, { type = "JOIN" }, PROTOCOL)
+local lastServerMsg = 0  -- os.clock() 时间戳，连接时初始化，用于心跳超时检测
 
 ----------------------------------------------
 -- 客户端状态
 ----------------------------------------------
 local gameState = {
-    -- 基础连接信息
-    gamePhase = "LOBBY",
-    isHost = false,
-    lobbyCount = 1,
-    -- 消息提示
-    toastMsg = "",
-    toastTimer = 0,
-    -- UI 交互状态
-    selectedHandIdx = 1,            -- 选中牌的编号
-    selectedRowIdx = 1,             -- 选行光标 (1-4)
-    stagedCard = nil,               -- 当前选中卡牌
-    waitingTarget = nil,            -- 当前正在等待谁选行
-    isLocked = false,               -- 是否锁定了出牌
-    -- 游戏内数据
-    hand = {},                      -- 当前玩家手牌
-    tableRows = { {}, {}, {}, {} }, -- 牌局四行情况
-    turnCards = {},                 -- 本轮展示的牌
+    gamePhase       = "MENU",
+    isHost          = false,
+    lobbyCount      = 0,
+    myID            = os.getComputerID(),
+    selectedHandIdx = 1,
+    selectedRowIdx  = 1,
+    stagedCard      = nil,
+    waitingTarget   = nil,
+    isLocked        = false,
+    hand            = {},
+    tableRows       = { {}, {}, {}, {} },
+    turnCards       = {},
 }
 
+----------------------------------------------
+-- 连接辅助
+----------------------------------------------
+local function doConnect(sID)
+    SERVER_ID = sID
+    config.lastServerID = sID
+    utils.saveConfig(config, CONFIG_FILE)
+    lastServerMsg = os.clock()
+    rednet.send(SERVER_ID, { type = "act_joinRoom" }, PROTOCOL)
+end
+
+-- 断线/房间解散时调用，重置所有状态并退回菜单
+local function onServerDisconnected(reason)
+    SERVER_ID = nil
+    gameState.gamePhase   = "MENU"
+    gameState.isHost      = false
+    gameState.lobbyCount  = 0
+    gameState.hand        = {}
+    gameState.tableRows   = { {}, {}, {}, {} }
+    gameState.turnCards   = {}
+    gameState.stagedCard  = nil
+    gameState.waitingTarget = nil
+    -- 重置 roomFrame 各组件状态以便下次复用
+    lblHostBadge:setText("")
+    lblWaiting.visible    = true
+    btnRoomStart.visible  = false
+    lblRoomID:setText("Room: ---")
+    lblPlayerCount:setText("Players: 0 connected")
+    -- 切回菜单
+    gameFrame.visible  = false
+    roomFrame.visible  = false
+    menuFrame.visible  = true
+    menuStatusLbl:setForeground(colors.red):setText(reason or "Room discarded")
+end
+
 -------------------------------------------------------------------------
--- Basalt UI 布局构建
+-- Basalt UI 布局
 -------------------------------------------------------------------------
 
--- [大厅界面层级结构]
--- title: 标题文本栏
--- buttonArea: 按钮选项区
-local lobbyFrame = basalt.createFrame()
+-- ========================
+-- [菜单界面] menuFrame
+-- ========================
+local menuFrame = basalt.createFrame()
     :setForeground(colors.white):setBackground(colors.black)
 
-local title = lobbyFrame:addLabel()
-    :setPosition("{parent.width / 2 - 4}", 2)
+-- 游戏标题图片（basalt addImage 加载 bimg）
+menuFrame:addImage()
+    :setPosition("{parent.width / 2 - 12}", 2)
+    :setPath(shell.resolve("bimg/nimmt_logo.bimg"))
 
-lobbyFrame:addLabel():setText("Server ID:"):setPosition(4, 6)
-local inputServer = lobbyFrame:addInput({
-        placeholder = "Room ID",
-        placeholderColor = colors.gray,
+-- 状态提示行（连接中/错误信息）
+local menuStatusLbl = menuFrame:addLabel()
+    :setPosition("{parent.width / 2 - 12}", 11)
+    :setSize(26, 1)
+    :setForeground(colors.lightGray)
+    :setText("")
+
+-- 前向声明，供 Join Game 按钮的回调引用
+local joinModal
+
+menuFrame:addButton()
+    :setPosition("{parent.width / 2 - 14}", 13):setSize(13, 3)
+    :setBackground(colors.green):setForeground(colors.black)
+    :setText("Create Game")
+    :onClick(function()
+        menuStatusLbl:setForeground(colors.yellow):setText("Searching...")
+        local id = rednet.lookup(PROTOCOL, "NIMMT_SERVER")
+        if not id and config.lastServerID then
+            id = config.lastServerID
+        end
+        if id then
+            doConnect(id)
+        else
+            menuStatusLbl:setForeground(colors.red):setText("Server not found!")
+        end
+    end)
+
+menuFrame:addButton()
+    :setPosition("{parent.width / 2 + 1}", 13):setSize(12, 3)
+    :setBackground(colors.blue):setForeground(colors.white)
+    :setText("Join Game")
+    :onClick(function()
+        joinModal.visible = true
+    end)
+
+-- Join Game 模态输入框（默认隐藏，z=5 浮在按钮上）
+joinModal = menuFrame:addFrame()
+    :setPosition("{parent.width / 2 - 11}", "{parent.height / 2 - 3}"):setSize(24, 7)
+    :setBackground(colors.gray):setZ(5)
+joinModal.visible = false
+
+joinModal:addLabel():setPosition(3, 2):setForeground(colors.white):setText("Enter Server ID:")
+
+local inputServerID = joinModal:addInput({
+        placeholder      = "e.g. 42",
+        placeholderColor = colors.lightGray,
     })
-    :setPosition(15, 6):setSize(10, 1)
+    :setPosition(3, 4):setSize(19, 1)
     :setBackground(colors.black):setForeground(colors.white)
 
-local lblStatus = lobbyFrame:addLabel()
-    :setPosition("parent.w / 2 - 10", 10)
-    :setForeground(colors.lightGray)
-    :setText("Status: Not Connected")
+joinModal:addButton():setPosition(3, 6):setSize(8, 1)
+    :setBackground(colors.red):setForeground(colors.white):setText("Cancel")
+    :onClick(function() joinModal.visible = false end)
 
-local btnJoin = lobbyFrame:addButton()
-    :setPosition("parent.w / 2 - 8", 12):setSize(16, 3)
-    :setBackground(colors.blue)
-    :setText("Join Room")
+joinModal:addButton():setPosition(13, 6):setSize(9, 1)
+    :setBackground(colors.lime):setForeground(colors.black):setText("Connect")
     :onClick(function()
-        local sID = tonumber(inputServer:getValue())
-        if not sID then
-            showToast("Invalid Server ID", 2, colors.red)
-            return
+        local sID = tonumber(inputServerID:getValue())
+        if sID then
+            joinModal.visible = false
+            menuStatusLbl:setForeground(colors.yellow):setText("Connecting to " .. sID .. "...")
+            doConnect(sID)
+        else
+            menuStatusLbl:setForeground(colors.red):setText("Invalid ID!")
         end
-        SERVER_ID = sID
-        rednet.send(SERVER_ID, { type = "JOIN_ROOM" }, PROTOCOL)
-        lblStatus:setText("Status: Connecting...")
     end)
 
--- 开始游戏按钮 (仅房主可见，默认隐藏)
-local btnStartGame = lobbyFrame:addButton()
-    :setText("START GAME")
-    :setPosition("parent.w / 2 - 8", 16)
-    :setSize(16, 3)
-    :setBackground(colors.green)
-    :hide()
+-- ========================
+-- [房间大厅] roomFrame
+-- ========================
+local roomFrame = basalt.createFrame()
+    :setForeground(colors.white):setBackground(colors.black)
+roomFrame.visible = false
+
+local roomHeader = roomFrame:addFrame()
+    :setPosition(1, 1):setSize("{parent.width}", 2)
+    :setBackground(colors.blue)
+
+roomHeader:addLabel():setPosition(2, 1):setForeground(colors.white):setText("6 Nimmt!")
+
+local lblRoomID = roomHeader:addLabel()
+    :setPosition(12, 1):setForeground(colors.yellow):setText("Room: ---")
+
+local lblPlayerCount = roomFrame:addLabel()
+    :setPosition(4, 5):setForeground(colors.white):setText("Players: 0 connected")
+
+roomFrame:addLabel()
+    :setPosition(4, 7):setForeground(colors.cyan)
+    :setText("Your ID: " .. os.getComputerID())
+
+local lblHostBadge = roomFrame:addLabel()
+    :setPosition(4, 9):setForeground(colors.yellow):setText("")
+
+local lblWaiting = roomFrame:addLabel()
+    :setPosition(4, 11):setForeground(colors.lightGray):setText("Waiting for host to start...")
+
+local btnRoomStart = roomFrame:addButton()
+    :setPosition("{parent.width / 2 - 7}", 13):setSize(15, 3)
+    :setBackground(colors.green):setForeground(colors.black):setText("START GAME")
     :onClick(function()
-        rednet.send(SERVER_ID, { type = "START_GAME" }, PROTOCOL)
+        rednet.send(SERVER_ID, { type = "act_startGame" }, PROTOCOL)
     end)
+btnRoomStart.visible = false
 
--- [游戏界面层级结构]
--- header: 顶部信息栏
--- boardArea: 中间游戏区 (显示4行)
--- infoArea: 也就是TurnCards，显示本轮出牌
--- handArea: 底部手牌区
+-- ========================
+-- [游戏界面] gameFrame
+-- ========================
 local gameFrame = basalt.createFrame()
     :setForeground(colors.white):setBackground(colors.black)
+gameFrame.visible = false
 
 local header = gameFrame:addFrame()
     :setPosition(1, 1):setSize("{parent.width}", 1)
     :setBackground(colors.blue)
 
 local titleLabel = header:addLabel()
-    :setPosition(2, 2)
-    :setForeground(colors.white)
-    :setText("6 Nimmt! Room: ?")
+    :setPosition(2, 1):setForeground(colors.white):setText("6 Nimmt!")
 
 local statusLabel = header:addLabel()
-    :setPosition("{parent.width - 20}", 2)
-    :setForeground(colors.yellow)
-    :setText("Phase: LOBBY")
+    :setPosition("{parent.width - 16}", 1):setForeground(colors.yellow):setText("Phase: PLAYING")
 
 local boardArea = gameFrame:addFrame()
-    :setPosition(1, 8):setSize("{parent.width}", 12)
-    :setBackground(colors.black)
+    :setPosition(1, 8):setSize("{parent.width}", 12):setBackground(colors.black)
 
 local infoArea = gameFrame:addFrame()
-    :setPosition(1, 4):setSize("{parent.width}", 4)
-    :setBackground(colors.gray)
-local infoLbl = infoArea:addLabel()
-    :setPosition(2, 2)
-    :setText("Turn Cards:")
+    :setPosition(1, 4):setSize("{parent.width}", 4):setBackground(colors.gray)
 
 local handArea = gameFrame:addFrame()
-    :setPosition(1, "{parent.height - 5}"):setSize("{parent.width}", 6)
-    :setBackground(colors.black)
-local handLbl = handArea:addLabel()
-    :setPosition(2, 1):setForeground(colors.lightBlue)
-    :setText("Your Hand:")
+    :setPosition(1, "{parent.height - 5}"):setSize("{parent.width}", 6):setBackground(colors.black)
 
--- 消息提示框 (Toast / Modal)
-local toastFrame = gameFrame:addFrame({ visible = false })
+handArea:addLabel():setPosition(2, 1):setForeground(colors.lightBlue):setText("Your Hand:")
+
+-- Toast 通知框
+local toastFrame = gameFrame:addFrame()
     :setPosition("{parent.width / 2 - 15}", "{parent.height / 2 - 2}"):setZ(10):setSize(30, 5)
     :setBackground(colors.red)
+toastFrame.visible = false
+
 local toastLabel = toastFrame:addLabel()
-    :setPosition(2, 2):setSize("{parent.width}", 3)
-    :setForeground(colors.white)
-    :setText("Notification")
+    :setPosition(2, 2):setSize("{parent.width - 2}", 3):setForeground(colors.white):setText("")
 
 -------------------------------------------------------------------------
 -- UI 组件封装 (Helper Functions)
 -------------------------------------------------------------------------
 
--- 显示 Toast 消息
 local function showToast(msg, duration, color)
     toastFrame:setBackground(color or colors.red)
     toastLabel:setText(msg)
     toastFrame.visible = true
-    -- 使用 Basalt 的内置定时任务
     basalt.schedule(function()
         os.sleep(duration or 2)
         toastFrame.visible = false
     end)
 end
 
--- 切换界面至游戏界面
-local function switchToGame()
-    lobbyFrame.visible = false
-    gameFrame.visible = true
-    showToast("Game Started!", 2, colors.green)
-end
-
--- 绘制一张卡牌 (Card Widget)
--- parent: 父容器
--- x, y: 坐标
--- value: 牌面数值
--- onClickFunc: 点击回调
--- isSelected: 是否高亮
+-- 绘制一张卡牌
 local function createCard(parent, x, y, value, onClickFunc, isSelected)
     local bgCol = isSelected and colors.yellow or colors.white
-    local fgCol = isSelected and colors.black or colors.black
+    local fgCol = colors.black
 
-    -- 牛头数颜色处理
-    local score = 1
-    if value == 55 then
-        score = 7; bgCol = colors.red; fgCol = colors.white
-    elseif value % 11 == 0 then
-        score = 5; bgCol = colors.orange
-    elseif value % 10 == 0 then
-        score = 3; bgCol = colors.lightBlue
-    elseif value % 5 == 0 then
-        score = 2; bgCol = colors.cyan
+    local bulls = core.getBullHeadCount(value)
+    if bulls == 7 then
+        bgCol = colors.red; fgCol = colors.white
+    elseif bulls == 5 then
+        bgCol = colors.orange
+    elseif bulls == 3 then
+        bgCol = colors.lightBlue
+    elseif bulls == 2 then
+        bgCol = colors.cyan
     end
 
-    -- 卡牌主体
     local card = parent:addButton()
-        :setPosition(x, y)
-        :setSize(4, 3) -- 宽4 高3 的小方块
-        :setBackground(bgCol)
-        :setForeground(fgCol)
+        :setPosition(x, y):setSize(4, 3)
+        :setBackground(bgCol):setForeground(fgCol)
         :setText(tostring(value))
 
-    if onClickFunc then
-        card:onClick(onClickFunc)
-    end
-
-    -- 装饰：牛头标记（可选，简单用字符表示）
-    -- 这里省略复杂绘图，用颜色区分足以
+    if onClickFunc then card:onClick(onClickFunc) end
     return card
 end
 
@@ -248,74 +267,60 @@ end
 -- 动态 UI 更新逻辑
 -------------------------------------------------------------------------
 
--- 刷新手牌区
 local function updateHandUI()
-    handArea:removeChild() -- 清空旧牌
+    handArea:removeChild()
     handArea:addLabel():setPosition(2, 1):setForeground(colors.lightBlue):setText("Your Hand:")
 
     local handX = 2
-    local handY = 2
-
-    for i, cardVal in ipairs(gameState.hand) do
-        -- 判断这张牌是否被锁定了(已出)
-        local isLocked = (cardVal == gameState.stagedCard)
-        createCard(handArea, handX, handY, cardVal, function()
-            -- 点击事件
-            if gameState.phase == "PLAYING" and not gameState.stagedCard then
+    for _, cardVal in ipairs(gameState.hand) do
+        local isSelected = (cardVal == gameState.stagedCard)
+        createCard(handArea, handX, 2, cardVal, function()
+            if gameState.gamePhase == "PLAYING" and not gameState.stagedCard then
                 gameState.stagedCard = cardVal
-                rednet.send(SERVER_ID, { type = "PLAY_CARD", card = cardVal }, PROTOCOL)
+                rednet.send(SERVER_ID, { type = "act_playCard", card = cardVal }, PROTOCOL)
                 showToast("Card Sent!", 2, colors.green)
-                updateHandUI() -- 刷新以显示锁定状态
+                updateHandUI()
             end
-        end, isLocked)         -- 如果被锁定，传入高亮参数
-        handX = handX + 5      -- 间隔
+        end, isSelected)
+        handX = handX + 5
     end
 end
 
--- 刷新中央牌桌区
 local function updateBoardUI()
     boardArea:removeChild()
     for i = 1, 4 do
         local rowY = 1 + (i - 1) * 3
-        -- 行号标签
-        local lbl = boardArea:addButton() -- 用Button做标签，方便点击
+        local lbl = boardArea:addButton()
             :setPosition(2, rowY + 1):setSize(6, 1)
             :setBackground(colors.black)
-            :setForeground(gameState.phase == "ROW_SELECT" and colors.yellow or colors.gray)
+            :setForeground(gameState.gamePhase == "ROW_SELECT" and colors.yellow or colors.gray)
             :setText("Row " .. i)
-        -- 如果处于选行阶段，点击行号触发
-        if gameState.phase == "ROW_SELECT" then
+        if gameState.gamePhase == "ROW_SELECT" then
             lbl:setBackground(colors.blue):setForeground(colors.white)
             lbl:onClick(function()
-                rednet.send(SERVER_ID, { type = "CHOOSE_ROW", rowIndex = i }, PROTOCOL)
-                gameState.phase = "WAITING"
+                rednet.send(SERVER_ID, { type = "act_chooseRow", rowIndex = i }, PROTOCOL)
+                gameState.gamePhase = "WAITING"
                 showToast("Row Selected", 2, colors.green)
                 updateBoardUI()
             end)
         end
-        -- 绘制该行的牌
-        local rowData = gameState.tableRows[i]
         local rowX = 9
-        for _, cVal in ipairs(rowData) do
+        for _, cVal in ipairs(gameState.tableRows[i]) do
             createCard(boardArea, rowX, rowY, cVal, nil, false)
             rowX = rowX + 5
         end
     end
 end
 
--- 刷新顶部历史/状态区
 local function updateInfoUI()
     infoArea:removeChild()
-    infoArea:addLabel():setPosition(2, 2)
-        :setText("Current Turn:")
+    infoArea:addLabel():setPosition(2, 2):setText("Current Turn:")
 
     local x = 14
     for _, entry in ipairs(gameState.turnCards) do
-        -- 小卡片展示
         local bg = colors.lightGray
         if entry.id == os.getComputerID() then bg = colors.green end
-
-        local btn = infoArea:addButton():setPosition(x, 1):setSize(4, 3):setBackground(bg):setText(entry.card)
+        infoArea:addButton():setPosition(x, 1):setSize(4, 3):setBackground(bg):setText(tostring(entry.card))
         x = x + 5
     end
 
@@ -327,7 +332,6 @@ local function updateInfoUI()
     end
 end
 
--- 总刷新入口
 local function refreshAll()
     updateHandUI()
     updateBoardUI()
@@ -338,113 +342,146 @@ end
 -- 交互函数分发表
 ----------------------------------------------
 local handlers = {}
+
 -- [大厅逻辑]
-handlers["LOBBY_UPDATE"] = function(msg)
+handlers["sync_lobbyUpdate"] = function(msg)
     gameState.lobbyCount = msg.count
-    titleLabel:setText("Room Players: " .. msg.count)
-    if gameState.isHost then
-        -- 如果是房主，显示开始按钮
-        local startBtn = header:addButton():setPosition("{parent.width - 10}", 1):setSize(8, 3)
-            :setText("START"):setBackground(colors.green)
-            :onClick(function(self)
-                rednet.send(SERVER_ID, { type = "START" }, PROTOCOL)
-                self:destroy()
-            end)
+    -- 首次收到 lobbyUpdate，从菜单切换到房间大厅
+    if gameState.gamePhase == "MENU" then
+        gameState.gamePhase = "LOBBY"
+        menuFrame.visible = false
+        roomFrame.visible = true
     end
+    lblRoomID:setText("Room: " .. tostring(SERVER_ID))
+    lblPlayerCount:setText("Players: " .. msg.count .. " connected")
 end
-handlers["SET_HOST"] = function(msg)
+
+handlers["ev_setHost"] = function(msg)
     gameState.isHost = true
+    lblHostBadge:setText("You are the HOST")
+    lblWaiting.visible = false
+    btnRoomStart.visible = true
 end
+
 -- [游戏通用]
-handlers["TOAST"] = function(msg)
+handlers["msg_toast"] = function(msg)
     showToast(msg.msg, 5, colors.orange)
 end
-handlers["GAME_START"] = function(msg)
+
+handlers["ev_gameStart"] = function(msg)
     gameState.gamePhase = "PLAYING"
     gameState.tableRows = msg.rows
     if msg.roundReset then
-        gameState.turnCards = {} -- 新一轮清空历史
+        gameState.turnCards = {}
         gameState.hand = {}
         gameState.waitingTarget = nil
     end
+    roomFrame.visible = false
+    gameFrame.visible = true
     refreshAll()
 end
-handlers["UPDATE_HAND"] = function(msg)
+
+handlers["sync_dealHand"] = function(msg)
     gameState.hand = msg.hand
     table.sort(gameState.hand)
-    -- 修正光标防止越界
+    updateHandUI()
+end
+
+handlers["sync_updateHand"] = function(msg)
+    gameState.hand = msg.hand
+    table.sort(gameState.hand)
     if gameState.selectedHandIdx > #gameState.hand then
-        gameState.selectedHandIdx = math.max(1,
-            #gameState.hand)
+        gameState.selectedHandIdx = math.max(1, #gameState.hand)
     end
     updateHandUI()
 end
-handlers["TURN_SUMMARY"] = function(msg)
-    gameState.turnCards = msg.cards -- 接收服务器发来的排序好的出牌列表
-    gameState.stagedCard = nil      -- 结算开始了，清除自己的预选标记
-    gameState.isLocked = false      -- 解锁状态
+
+handlers["sync_turnSummary"] = function(msg)
+    gameState.turnCards = msg.cards
+    gameState.stagedCard = nil
+    gameState.isLocked = false
     updateInfoUI()
 end
-handlers["UPDATE_BOARD"] = function(msg)
+
+handlers["sync_updateBoard"] = function(msg)
     gameState.tableRows = msg.rows
     updateBoardUI()
 end
-handlers["SCORE_UPDATE"] = function(msg)
-    -- 可以在这里做一个弹窗显示分数，目前简化为Toast
-    gameState.toastMsg = "Scores updated!"
-    gameState.toastTimer = 5
+
+handlers["sync_scoreUpdate"] = function(msg)
+    showToast("Scores updated!", 3, colors.blue)
 end
-handlers["WAITING_STATUS"] = function(msg)
+
+handlers["ev_waitingStatus"] = function(msg)
     gameState.waitingTarget = msg.targetID
+    updateInfoUI()
 end
+
 -- [选行逻辑]
-handlers["REQUEST_ROW_CHOICE"] = function(msg)
+handlers["req_rowChoice"] = function(msg)
     gameState.gamePhase = "ROW_SELECT"
-    gameState.tableRows = msg.rows -- 更新一下残局
-    gameState.waitingTarget = nil  -- 既然轮到我了，就不用显示等待别人了
+    gameState.tableRows = msg.rows
+    gameState.waitingTarget = nil
     gameState.selectedRowIdx = 1
     showToast("Choose a Row!", 5, colors.red)
     refreshAll()
 end
+
 -- [新回合/结束]
-handlers["NEW_TURN"] = function(msg)
-    gameState.gamePhase = "PLAYING" -- 恢复出牌模式
+handlers["ev_newTurn"] = function(msg)
+    gameState.gamePhase = "PLAYING"
     gameState.isLocked = false
     gameState.stagedCard = nil
-    gameState.turnCards = {} -- 清空上一回合的出牌展示
+    gameState.turnCards = {}
     gameState.waitingTarget = nil
     refreshAll()
 end
-handlers["ROUND_OVER"] = function(msg)
+
+handlers["ev_roundOver"] = function(msg)
     gameState.gamePhase = "ROUND_OVER"
     gameState.stagedCard = nil
 end
 
+handlers["ev_gameOver"] = function(msg)
+    gameState.gamePhase = "GAME_OVER"
+    showToast("GAME OVER!", 5, colors.red)
+end
+
+-- 服务器主动广播关闭（Ctrl+T / 正常关机）
+handlers["ev_serverClosing"] = function(msg)
+    onServerDisconnected(msg.msg or "Room discarded")
+end
+
+-- 心跳：更新最后收到消息的时间戳
+handlers["ev_heartbeat"] = function(msg)
+    lastServerMsg = os.clock()
+end
+
 -------------------------------------------------------------------------
--- 网络事件处理 (Event Listeners)
+-- 网络事件处理
 -------------------------------------------------------------------------
--- 核心逻辑：监听 rednet_message 事件
 basalt.onEvent("rednet_message", function(event, senderID, msg, protocol)
-    -- 过滤：只处理来自服务器 且 协议正确的消息
     if senderID == SERVER_ID and protocol == PROTOCOL then
+        lastServerMsg = os.clock()  -- 任何来自服务器的消息都重置超时计时器
         local func = handlers[msg.type]
         if func then
-            titleLabel:setText("Roger")
             func(msg)
         else
-            -- 未知的消息类型，可以在开发时打印日志
-            print("Unknown message type: " .. msg.type)
+            print("Unknown msg: " .. tostring(msg.type))
         end
     end
 end)
 
-----------------------------------------------
--- 用户输入处理
-----------------------------------------------
-basalt.onEvent("key", function(event, key)
+basalt.onEvent("key", function(event, key) end)
 
+-- 心跳超时检测：每 10s 检查一次，若 20s 内无任何 server 消息则视为断线
+basalt.schedule(function()
+    while true do
+        os.sleep(10)
+        if SERVER_ID and (os.clock() - lastServerMsg) > 20 then
+            onServerDisconnected("Connection lost")
+        end
+    end
 end)
 
-refreshAll()    -- 初始绘制
-basalt.update() -- 启动 Basalt 主循环，接管一切
 basalt.run()
