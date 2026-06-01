@@ -64,10 +64,7 @@ end
 ----------------------------------------------
 local function resolveTurn()
     if #gameState.turn_cards == 0 then
-        -- 广播更新后的桌面
-        rednet.broadcast({ type = "sync_updateBoard", rows = gameState.rows }, PROTOCOL)
-        os.sleep(1) -- 展示最终结果
-
+        os.sleep(1)
         local anyPlayerID = next(gameState.players)
         if anyPlayerID and #gameState.players[anyPlayerID].hand == 0 then
             print("Round Over. Checking scores...")

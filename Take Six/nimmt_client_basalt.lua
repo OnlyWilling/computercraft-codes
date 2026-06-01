@@ -224,6 +224,27 @@ toastFrame.visible = false
 local toastLabel = toastFrame:addLabel()
     :setPosition(2, 2):setSize("{parent.width - 2}", 3):setForeground(colors.white):setText("")
 
+-- 分数展示覆盖层（轮末显示，z=8 低于 toast）
+local scoreOverlay = gameFrame:addFrame()
+    :setPosition("{parent.width / 2 - 17}", "{parent.height / 2 - 5}"):setZ(8):setSize(35, 11)
+    :setBackground(colors.gray)
+scoreOverlay.visible = false
+
+scoreOverlay:addLabel()
+    :setPosition(2, 1)
+    :setForeground(colors.yellow)
+    :setText("=== Round Scores ===")
+
+local scoreFooterLbl = scoreOverlay:addLabel()
+    :setPosition(2, 10)
+    :setForeground(colors.lightGray)
+    :setText("Next round starting...")
+
+local scoreListFrame = scoreOverlay:addFrame()
+    :setPosition(2, 3)
+    :setSize(31, 7)
+    :setBackground(colors.gray)
+
 -------------------------------------------------------------------------
 -- UI 组件封装 (Helper Functions)
 -------------------------------------------------------------------------
@@ -369,6 +390,7 @@ handlers["msg_toast"] = function(msg)
 end
 
 handlers["ev_gameStart"] = function(msg)
+    scoreOverlay.visible = false
     gameState.gamePhase = "PLAYING"
     gameState.tableRows = msg.rows
     if msg.roundReset then
@@ -409,7 +431,22 @@ handlers["sync_updateBoard"] = function(msg)
 end
 
 handlers["sync_scoreUpdate"] = function(msg)
-    showToast("Scores updated!", 3, colors.blue)
+    scoreListFrame:removeChild()
+    local sorted = {}
+    for _, entry in ipairs(msg.scores) do
+        table.insert(sorted, entry)
+    end
+    table.sort(sorted, function(a, b) return a.score > b.score end)
+    for i, entry in ipairs(sorted) do
+        local isMe = (entry.id == os.getComputerID())
+        local fg = isMe and colors.yellow or colors.grey
+        scoreListFrame:addLabel()
+            :setPosition(1, i)
+            :setForeground(fg)
+            :setText(string.format("P%-5s %2d", tostring(entry.id), entry.score))
+    end
+    scoreFooterLbl:setText("Next round starting...")
+    scoreOverlay.visible = true
 end
 
 handlers["ev_waitingStatus"] = function(msg)
@@ -444,7 +481,8 @@ end
 
 handlers["ev_gameOver"] = function(msg)
     gameState.gamePhase = "GAME_OVER"
-    showToast("GAME OVER!", 5, colors.red)
+    scoreFooterLbl:setText("=== GAME OVER ===")
+    scoreOverlay.visible = true
 end
 
 -- 服务器主动广播关闭（Ctrl+T / 正常关机）
