@@ -81,7 +81,7 @@ local menuFrame = basalt.createFrame()
 -- 游戏标题图片（basalt addImage 加载 bimg）
 menuFrame:addImage()
     :setPosition("{parent.width / 2 - 12}", 2)
-    :setPath(shell.resolve("bimg/nimmt_logo.bimg"))
+    -- :setPath(shell.resolve("bimg/nimmt_logo.bimg"))
 
 -- 状态提示行（连接中/错误信息）
 local menuStatusLbl = menuFrame:addLabel()
@@ -120,8 +120,9 @@ menuFrame:addButton()
 
 -- Join Game 模态输入框（默认隐藏，z=5 浮在按钮上）
 joinModal = menuFrame:addFrame()
-    :setPosition("{parent.width / 2 - 11}", "{parent.height / 2 - 3}"):setSize(24, 7)
-    :setBackground(colors.gray):setZ(5)
+    :setPosition("{math.floor(parent.width / 2) - 11}", "{math.floor(parent.height / 2) - 3}"):setSize(24, 7)
+    -- :setBackground(colors.gray):setZ(5)
+    :setBackground(colors.gray)
 joinModal.visible = false
 
 joinModal:addLabel():setPosition(3, 2):setForeground(colors.white):setText("Enter Server ID:")
@@ -140,7 +141,7 @@ joinModal:addButton():setPosition(3, 6):setSize(8, 1)
 joinModal:addButton():setPosition(13, 6):setSize(9, 1)
     :setBackground(colors.lime):setForeground(colors.black):setText("Connect")
     :onClick(function()
-        local sID = tonumber(inputServerID:getValue())
+        local sID = tonumber(inputServerID:getText())
         if sID then
             joinModal.visible = false
             menuStatusLbl:setForeground(colors.yellow):setText("Connecting to " .. sID .. "...")
@@ -217,7 +218,7 @@ handArea:addLabel():setPosition(2, 1):setForeground(colors.lightBlue):setText("Y
 
 -- Toast 通知框
 local toastFrame = gameFrame:addFrame()
-    :setPosition("{parent.width / 2 - 15}", "{parent.height / 2 - 2}"):setZ(10):setSize(30, 5)
+    :setPosition("{math.floor(parent.width / 2) - 15}", "{math.floor(parent.height / 2) - 2}"):setZ(10):setSize(30, 5)
     :setBackground(colors.red)
 toastFrame.visible = false
 
@@ -226,7 +227,7 @@ local toastLabel = toastFrame:addLabel()
 
 -- 分数展示覆盖层（轮末显示，z=8 低于 toast）
 local scoreOverlay = gameFrame:addFrame()
-    :setPosition("{parent.width / 2 - 17}", "{parent.height / 2 - 5}"):setZ(8):setSize(35, 11)
+    :setPosition("{math.floor(parent.width / 2) - 17}", "{math.floor(parent.height / 2) - 5}"):setZ(8):setSize(35, 11)
     :setBackground(colors.gray)
 scoreOverlay.visible = false
 
