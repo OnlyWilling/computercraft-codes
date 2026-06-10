@@ -2,23 +2,28 @@ local modem = peripheral.find("modem")
 if not modem then error("No Wireless Modem found") end
 rednet.open(peripheral.getName(modem))
 
-local utils  = require("utils")
-local core   = require("nimmt_core")
-local basalt = require("basalt")
+local utils          = require("utils")
+local core           = require("nimmt_core")
+local basalt         = require("basalt")
 
-local PROTOCOL    = "NIMMT"
-local CONFIG_FILE = shell.resolve(".nimmt_config")
-local SERVER_ID   = nil
+local PROTOCOL       = "NIMMT"
+local CONFIG_FILE    = "./nimmt.cfg"
+local BIMG_PATH      = "./bimg/nimmt_logo.bimg"
+local SERVER_ID      = nil
 
 local default_config = { lastServerID = nil }
-local config = utils.loadConfig(default_config, CONFIG_FILE)
+local config         = utils.loadConfig(default_config, CONFIG_FILE)
 
-local lastServerMsg = 0  -- os.clock() 时间戳，连接时初始化，用于心跳超时检测
+local lastServerMsg  = 0 -- os.clock() 时间戳，连接时初始化，用于心跳超时检测
+
+-- 待定连接状态：doConnect 后先不设置 SERVER_ID，收到 sync_lobbyUpdate 才确认
+local pendingServerID    = nil
+local pendingConnectTime = nil
 
 ----------------------------------------------
 -- 客户端状态
 ----------------------------------------------
-local gameState = {
+local gameState      = {
     gamePhase       = "MENU",
     isHost          = false,
     lobbyCount      = 0,
@@ -37,35 +42,11 @@ local gameState = {
 -- 连接辅助
 ----------------------------------------------
 local function doConnect(sID)
-    SERVER_ID = sID
     config.lastServerID = sID
     utils.saveConfig(config, CONFIG_FILE)
-    lastServerMsg = os.clock()
-    rednet.send(SERVER_ID, { type = "act_joinRoom" }, PROTOCOL)
-end
-
--- 断线/房间解散时调用，重置所有状态并退回菜单
-local function onServerDisconnected(reason)
-    SERVER_ID = nil
-    gameState.gamePhase   = "MENU"
-    gameState.isHost      = false
-    gameState.lobbyCount  = 0
-    gameState.hand        = {}
-    gameState.tableRows   = { {}, {}, {}, {} }
-    gameState.turnCards   = {}
-    gameState.stagedCard  = nil
-    gameState.waitingTarget = nil
-    -- 重置 roomFrame 各组件状态以便下次复用
-    lblHostBadge:setText("")
-    lblWaiting.visible    = true
-    btnRoomStart.visible  = false
-    lblRoomID:setText("Room: ---")
-    lblPlayerCount:setText("Players: 0 connected")
-    -- 切回菜单
-    gameFrame.visible  = false
-    roomFrame.visible  = false
-    menuFrame.visible  = true
-    menuStatusLbl:setForeground(colors.red):setText(reason or "Room discarded")
+    rednet.send(sID, { type = "act_joinRoom" }, PROTOCOL)
+    pendingServerID = sID
+    pendingConnectTime = os.clock()
 end
 
 -------------------------------------------------------------------------
@@ -78,10 +59,13 @@ end
 local menuFrame = basalt.createFrame()
     :setForeground(colors.white):setBackground(colors.black)
 
--- 游戏标题图片（basalt addImage 加载 bimg）
-menuFrame:addImage()
-    :setPosition("{parent.width / 2 - 12}", 2)
-    -- :setPath(shell.resolve("bimg/nimmt_logo.bimg"))
+-- LOGO Image
+menuFrame:addImage({
+    bimg = utils.loadBimgImage(BIMG_PATH)
+})
+    :setPosition("{parent.width / 2 - 4}", 5)
+    :setForeground(colors.yellow)
+    :setText("6 Nimmt!")
 
 -- 状态提示行（连接中/错误信息）
 local menuStatusLbl = menuFrame:addLabel()
@@ -121,7 +105,7 @@ menuFrame:addButton()
 -- Join Game 模态输入框（默认隐藏，z=5 浮在按钮上）
 joinModal = menuFrame:addFrame()
     :setPosition("{math.floor(parent.width / 2) - 11}", "{math.floor(parent.height / 2) - 3}"):setSize(24, 7)
-    -- :setBackground(colors.gray):setZ(5)
+    :setBackground(colors.gray):setZ(5)
     :setBackground(colors.gray)
 joinModal.visible = false
 
@@ -245,6 +229,33 @@ local scoreListFrame = scoreOverlay:addFrame()
     :setPosition(2, 3)
     :setSize(31, 7)
     :setBackground(colors.gray)
+
+-------------------------------------------------------------------------
+-- 断线重置（断线/房间解散时调用，重置所有状态并退回菜单）
+-- 注意：定义在 UI 变量之后才会添加
+-------------------------------------------------------------------------
+local function onServerDisconnected(reason)
+    SERVER_ID               = nil
+    pendingServerID         = nil
+    pendingConnectTime      = nil
+    gameState.gamePhase     = "MENU"
+    gameState.isHost        = false
+    gameState.lobbyCount    = 0
+    gameState.hand          = {}
+    gameState.tableRows     = { {}, {}, {}, {} }
+    gameState.turnCards     = {}
+    gameState.stagedCard    = nil
+    gameState.waitingTarget = nil
+    lblHostBadge:setText("")
+    lblWaiting.visible      = true
+    btnRoomStart.visible    = false
+    lblRoomID:setText("Room: ---")
+    lblPlayerCount:setText("Players: 0 connected")
+    gameFrame.visible       = false
+    roomFrame.visible       = false
+    menuFrame.visible       = true
+    menuStatusLbl:setForeground(colors.red):setText(reason or "Room discarded")
+end
 
 -------------------------------------------------------------------------
 -- UI 组件封装 (Helper Functions)
@@ -500,23 +511,43 @@ end
 -- 网络事件处理
 -------------------------------------------------------------------------
 basalt.onEvent("rednet_message", function(event, senderID, msg, protocol)
-    if senderID == SERVER_ID and protocol == PROTOCOL then
-        lastServerMsg = os.clock()  -- 任何来自服务器的消息都重置超时计时器
-        local func = handlers[msg.type]
-        if func then
-            func(msg)
-        else
-            print("Unknown msg: " .. tostring(msg.type))
+    if protocol == PROTOCOL then
+        -- 待定连接：收到 sync_lobbyUpdate 即确认连接成功
+        if pendingServerID and senderID == pendingServerID and msg.type == "sync_lobbyUpdate" then
+            SERVER_ID = senderID
+            lastServerMsg = os.clock()
+            pendingServerID = nil
+            pendingConnectTime = nil
+            local func = handlers[msg.type]
+            if func then func(msg) end
+            return
+        end
+        -- 已建立连接的正常消息处理
+        if senderID == SERVER_ID then
+            lastServerMsg = os.clock()
+            local func = handlers[msg.type]
+            if func then
+                func(msg)
+            else
+                print("Unknown msg: " .. tostring(msg.type))
+            end
         end
     end
 end)
 
 basalt.onEvent("key", function(event, key) end)
 
--- 心跳超时检测：每 10s 检查一次，若 20s 内无任何 server 消息则视为断线
+-- 超时检测循环：连接超时(10s) + 心跳超时(20s)
 basalt.schedule(function()
     while true do
-        os.sleep(10)
+        os.sleep(1)
+        -- 待定连接 10s 超时
+        if pendingServerID and (os.clock() - pendingConnectTime) > 10 then
+            pendingServerID = nil
+            pendingConnectTime = nil
+            menuStatusLbl:setForeground(colors.red):setText("Connection timed out!")
+        end
+        -- 已建立连接的心跳超时（20s 无任何消息）
         if SERVER_ID and (os.clock() - lastServerMsg) > 20 then
             onServerDisconnected("Connection lost")
         end
