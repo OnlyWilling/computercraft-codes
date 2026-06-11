@@ -14,11 +14,11 @@ local SERVER_ID      = nil
 local default_config = { lastServerID = nil }
 local config         = utils.loadConfig(default_config, CONFIG_FILE)
 
-local lastServerMsg  = 0 -- os.clock() 时间戳，连接时初始化，用于心跳超时检测
+local timerLastServerMsg  = 0 -- os.clock() 时间戳，连接时初始化，用于心跳超时检测
 
 -- 待定连接状态：doConnect 后先不设置 SERVER_ID，收到 sync_lobbyUpdate 才确认
 local pendingServerID    = nil
-local pendingConnectTime = nil
+local timerPendingConnect = nil
 
 ----------------------------------------------
 -- 客户端状态
@@ -41,12 +41,20 @@ local gameState      = {
 ----------------------------------------------
 -- 连接辅助
 ----------------------------------------------
+-- DEBUG: 记录所有 rednet 消息到文件，排查连接问题
+local function debugLog(msg)
+    local f = fs.open(shell.resolve("./nimmt_debug.txt"), "a")
+    if f then
+        f.writeLine(os.clock() .. " " .. tostring(msg))
+        f.close()
+    end
+end
+
 local function doConnect(sID)
-    config.lastServerID = sID
-    utils.saveConfig(config, CONFIG_FILE)
+    debugLog("doConnect to " .. tostring(sID))
     rednet.send(sID, { type = "act_joinRoom" }, PROTOCOL)
     pendingServerID = sID
-    pendingConnectTime = os.clock()
+    timerPendingConnect = os.clock()
 end
 
 -------------------------------------------------------------------------
@@ -58,6 +66,7 @@ end
 -- ========================
 local menuFrame = basalt.createFrame()
     :setForeground(colors.white):setBackground(colors.black)
+    :setZ(1)
 
 -- LOGO Image
 menuFrame:addImage({
@@ -82,16 +91,31 @@ menuFrame:addButton()
     :setBackground(colors.green):setForeground(colors.black)
     :setText("Create Game")
     :onClick(function()
-        menuStatusLbl:setForeground(colors.yellow):setText("Searching...")
-        local id = rednet.lookup(PROTOCOL, "NIMMT_SERVER")
-        if not id and config.lastServerID then
-            id = config.lastServerID
+        if pendingServerID then return end
+        basalt.schedule(function()
+            menuStatusLbl:setForeground(colors.yellow):setText("Searching...")
+            local id = rednet.lookup(PROTOCOL, "NIMMT_SERVER")
+            debugLog("lookup result: " .. tostring(id))
+            if not id and config.lastServerID then
+                id = config.lastServerID
+            end
+            if id then
+                doConnect(id)
+            else
+                menuStatusLbl:setForeground(colors.red):setText("Server not found!")
+            end
+        end)
+    end)
+
+menuFrame:addButton()
+    :setPosition("{parent.width / 2 - 14}", 17):setSize(27, 3)
+    :setBackground(colors.red):setForeground(colors.white)
+    :setText("Quit Game")
+    :onClick(function()
+        if rednet.isOpen(peripheral.getName(modem)) then
+            rednet.close(peripheral.getName(modem))
         end
-        if id then
-            doConnect(id)
-        else
-            menuStatusLbl:setForeground(colors.red):setText("Server not found!")
-        end
+        basalt.stop()
     end)
 
 menuFrame:addButton()
@@ -102,10 +126,10 @@ menuFrame:addButton()
         joinModal.visible = true
     end)
 
--- Join Game 模态输入框（默认隐藏，z=5 浮在按钮上）
+-- Join Game 模态输入框（默认隐藏，z=2 浮在按钮上）
 joinModal = menuFrame:addFrame()
     :setPosition("{math.floor(parent.width / 2) - 11}", "{math.floor(parent.height / 2) - 3}"):setSize(24, 7)
-    :setBackground(colors.gray):setZ(5)
+    :setBackground(colors.gray):setZ(2)
     :setBackground(colors.gray)
 joinModal.visible = false
 
@@ -125,6 +149,7 @@ joinModal:addButton():setPosition(3, 6):setSize(8, 1)
 joinModal:addButton():setPosition(13, 6):setSize(9, 1)
     :setBackground(colors.lime):setForeground(colors.black):setText("Connect")
     :onClick(function()
+        if pendingServerID then return end
         local sID = tonumber(inputServerID:getText())
         if sID then
             joinModal.visible = false
@@ -140,6 +165,7 @@ joinModal:addButton():setPosition(13, 6):setSize(9, 1)
 -- ========================
 local roomFrame = basalt.createFrame()
     :setForeground(colors.white):setBackground(colors.black)
+    :setZ(3)
 roomFrame.visible = false
 
 local roomHeader = roomFrame:addFrame()
@@ -237,7 +263,7 @@ local scoreListFrame = scoreOverlay:addFrame()
 local function onServerDisconnected(reason)
     SERVER_ID               = nil
     pendingServerID         = nil
-    pendingConnectTime      = nil
+    timerPendingConnect      = nil
     gameState.gamePhase     = "MENU"
     gameState.isHost        = false
     gameState.lobbyCount    = 0
@@ -504,27 +530,31 @@ end
 
 -- 心跳：更新最后收到消息的时间戳
 handlers["ev_heartbeat"] = function(msg)
-    lastServerMsg = os.clock()
+    timerLastServerMsg = os.clock()
 end
 
 -------------------------------------------------------------------------
 -- 网络事件处理
 -------------------------------------------------------------------------
-basalt.onEvent("rednet_message", function(event, senderID, msg, protocol)
+basalt.onEvent("rednet_message", function(senderID, msg, protocol)
+    debugLog(string.format("from=%s type=%s proto=%s", tostring(senderID), tostring(msg.type), tostring(protocol)))
     if protocol == PROTOCOL then
         -- 待定连接：收到 sync_lobbyUpdate 即确认连接成功
         if pendingServerID and senderID == pendingServerID and msg.type == "sync_lobbyUpdate" then
+            debugLog("pending confirmed! server=" .. senderID)
             SERVER_ID = senderID
-            lastServerMsg = os.clock()
+            timerLastServerMsg = os.clock()
+            config.lastServerID = senderID
+            utils.saveConfig(config, CONFIG_FILE)
             pendingServerID = nil
-            pendingConnectTime = nil
+            timerPendingConnect = nil
             local func = handlers[msg.type]
             if func then func(msg) end
             return
         end
         -- 已建立连接的正常消息处理
         if senderID == SERVER_ID then
-            lastServerMsg = os.clock()
+            timerLastServerMsg = os.clock()
             local func = handlers[msg.type]
             if func then
                 func(msg)
@@ -535,20 +565,21 @@ basalt.onEvent("rednet_message", function(event, senderID, msg, protocol)
     end
 end)
 
-basalt.onEvent("key", function(event, key) end)
+basalt.onEvent("key", function(key) end)
 
--- 超时检测循环：连接超时(10s) + 心跳超时(20s)
+-- 超时检测循环：连接超时(4s) + 心跳超时(10s)
 basalt.schedule(function()
     while true do
-        os.sleep(1)
-        -- 待定连接 10s 超时
-        if pendingServerID and (os.clock() - pendingConnectTime) > 10 then
+        os.sleep(2)
+        -- 待定连接 4s 超时
+        if pendingServerID and (os.clock() - timerPendingConnect) > 4 then
+            debugLog("pending timeout for " .. tostring(pendingServerID))
             pendingServerID = nil
-            pendingConnectTime = nil
+            timerPendingConnect = nil
             menuStatusLbl:setForeground(colors.red):setText("Connection timed out!")
         end
-        -- 已建立连接的心跳超时（20s 无任何消息）
-        if SERVER_ID and (os.clock() - lastServerMsg) > 20 then
+        -- 已建立连接的心跳超时（10s 无任何消息）
+        if SERVER_ID and (os.clock() - timerLastServerMsg) > 10 then
             onServerDisconnected("Connection lost")
         end
     end

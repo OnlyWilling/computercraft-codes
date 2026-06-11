@@ -3,7 +3,7 @@
 --- @param path string 要保存的路径。
 --- @return boolean res 是否保存成功。
 local function saveConfig(configTable, path)
-    local file = fs.open(path, "w")
+    local file = fs.open(shell.resolve(path), "w")
     if file then
         file.write(textutils.serialize(configTable))
         file.close()
@@ -19,10 +19,10 @@ end
 --- @param path string 要读取的路径。
 --- @return table tab 加载的配置。
 local function loadConfig(defaultConfig, path)
-    if fs.exists(path) then
-        local file, err_open = fs.open(path, "r")
+    if fs.exists(shell.resolve(path)) then
+        local file, err = fs.open(shell.resolve(path), "rb")
         if not file then
-            printError("Error: Cannot open " .. err_open)
+            printError("Error: Cannot open " .. path)
             printError("Use default config...")
             return defaultConfig
         end
@@ -37,8 +37,27 @@ local function loadConfig(defaultConfig, path)
     end
 end
 
+--- 读取bimg图片文件。如果文件不存在，则error中断。
+--- @param path string 要读取的路径。
+--- @return table img bimg图片数据。
+local function loadBimgImage(path)
+    local file, err = fs.open(shell.resolve(path), "rb")
+    if not file then
+        error("Cannot open file: " .. err)
+    end
+    local data = file.readAll()
+    file.close()
+    local success, img = pcall(textutils.unserialize, data)
+    if not success then
+        error("Invalid BIMG file: " .. img)
+    end
+
+    return img
+end
+
 return {
     -- Tools
     saveConfig = saveConfig,
     loadConfig = loadConfig,
+    loadBimgImage = loadBimgImage,
 }
