@@ -11,7 +11,7 @@ local CONFIG_FILE    = "./nimmt.cfg"
 local BIMG_PATH      = "./bimg/nimmt_logo.bimg"
 local SERVER_ID      = nil
 
-local default_config = { lastServerID = nil }
+local default_config = { lastServerID = nil, debug = false }
 local config         = utils.loadConfig(default_config, CONFIG_FILE)
 
 local timerLastServerMsg  = 0 -- os.clock() 时间戳，连接时初始化，用于心跳超时检测
@@ -43,6 +43,7 @@ local gameState      = {
 ----------------------------------------------
 -- DEBUG: 记录所有 rednet 消息到文件，排查连接问题
 local function debugLog(msg)
+    if not config.debug then return end
     local f = fs.open(shell.resolve("./nimmt_debug.txt"), "a")
     if f then
         f.writeLine(os.clock() .. " " .. tostring(msg))
@@ -215,20 +216,20 @@ local titleLabel = header:addLabel()
 local statusLabel = header:addLabel()
     :setPosition("{parent.width - 16}", 1):setForeground(colors.yellow):setText("Phase: PLAYING")
 
-local boardArea = gameFrame:addFrame()
-    :setPosition(1, 8):setSize("{parent.width}", 12):setBackground(colors.black)
-
 local infoArea = gameFrame:addFrame()
-    :setPosition(1, 4):setSize("{parent.width}", 4):setBackground(colors.gray)
+    :setPosition(1, 2):setSize("{parent.width}", 4):setBackground(colors.gray)
+
+local boardArea = gameFrame:addFrame()
+    :setPosition(1, 6):setSize("{parent.width}", 12):setBackground(colors.black)
 
 local handArea = gameFrame:addFrame()
-    :setPosition(1, "{parent.height - 5}"):setSize("{parent.width}", 6):setBackground(colors.black)
+    :setPosition(1, "{parent.height - 3}"):setSize("{parent.width}", 6):setBackground(colors.black)
 
 handArea:addLabel():setPosition(2, 1):setForeground(colors.lightBlue):setText("Your Hand:")
 
 -- Toast 通知框
 local toastFrame = gameFrame:addFrame()
-    :setPosition("{math.floor(parent.width / 2) - 15}", "{math.floor(parent.height / 2) - 2}"):setZ(10):setSize(30, 5)
+    :setPosition("{math.floor(parent.width / 2) - 13}", "{math.floor(parent.height / 2) - 2}"):setZ(10):setSize(26, 4)
     :setBackground(colors.red)
 toastFrame.visible = false
 
@@ -280,6 +281,7 @@ local function onServerDisconnected(reason)
     gameFrame.visible       = false
     roomFrame.visible       = false
     menuFrame.visible       = true
+    basalt.setActiveFrame(menuFrame, true)
     menuStatusLbl:setForeground(colors.red):setText(reason or "Room discarded")
 end
 
@@ -308,9 +310,9 @@ local function createCard(parent, x, y, value, onClickFunc, isSelected)
     elseif bulls == 5 then
         bgCol = colors.orange
     elseif bulls == 3 then
-        bgCol = colors.lightBlue
-    elseif bulls == 2 then
         bgCol = colors.cyan
+    elseif bulls == 2 then
+        bgCol = colors.lightBlue
     end
 
     local card = parent:addButton()
@@ -325,9 +327,55 @@ end
 -------------------------------------------------------------------------
 -- 动态 UI 更新逻辑
 -------------------------------------------------------------------------
+local function updateInfoUI()
+    infoArea:clear()
+    infoArea:addLabel():setPosition(2, 1):setText("Current Turn:")
+
+    local x = 2
+    for _, entry in ipairs(gameState.turnCards) do
+        local bg = colors.lightGray
+        if entry.id == os.getComputerID() then bg = colors.green end
+        infoArea:addButton():setPosition(x, 2):setSize(4, 3):setBackground(bg):setText(tostring(entry.card))
+        x = x + 5
+    end
+
+    statusLabel:setText("Phase: " .. gameState.gamePhase)
+
+    if gameState.waitingTarget then
+        infoArea:addLabel():setPosition("{parent.width - 28}", 1):setForeground(colors.magenta)
+            :setText("Waiting P" .. gameState.waitingTarget .. " to choose row...")
+    end
+end
+
+local function updateBoardUI()
+    boardArea:clear()
+    for i = 1, 4 do
+        local rowY = 1 + (i - 1) * 3
+        local lbl = boardArea:addButton()
+            :setPosition(2, rowY):setSize(5, 1)
+            :setBackground(colors.black)
+            :setForeground(gameState.gamePhase == "ROW_SELECT" and colors.yellow or colors.gray)
+            :setText("Row " .. i)
+        if gameState.gamePhase == "ROW_SELECT" then
+            lbl:setBackground(colors.blue):setForeground(colors.white)
+            lbl:onClick(function()
+                rednet.send(SERVER_ID, { type = "act_chooseRow", rowIndex = i }, PROTOCOL)
+                gameState.gamePhase = "WAITING"
+                showToast("Row Selected", 2, colors.green)
+                updateBoardUI()
+                updateInfoUI()
+            end)
+        end
+        local rowX = 9
+        for _, cVal in ipairs(gameState.tableRows[i]) do
+            createCard(boardArea, rowX, rowY, cVal, nil, false)
+            rowX = rowX + 5
+        end
+    end
+end
 
 local function updateHandUI()
-    handArea:removeChild()
+    handArea:clear()
     handArea:addLabel():setPosition(2, 1):setForeground(colors.lightBlue):setText("Your Hand:")
 
     local handX = 2
@@ -342,52 +390,6 @@ local function updateHandUI()
             end
         end, isSelected)
         handX = handX + 5
-    end
-end
-
-local function updateBoardUI()
-    boardArea:removeChild()
-    for i = 1, 4 do
-        local rowY = 1 + (i - 1) * 3
-        local lbl = boardArea:addButton()
-            :setPosition(2, rowY + 1):setSize(6, 1)
-            :setBackground(colors.black)
-            :setForeground(gameState.gamePhase == "ROW_SELECT" and colors.yellow or colors.gray)
-            :setText("Row " .. i)
-        if gameState.gamePhase == "ROW_SELECT" then
-            lbl:setBackground(colors.blue):setForeground(colors.white)
-            lbl:onClick(function()
-                rednet.send(SERVER_ID, { type = "act_chooseRow", rowIndex = i }, PROTOCOL)
-                gameState.gamePhase = "WAITING"
-                showToast("Row Selected", 2, colors.green)
-                updateBoardUI()
-            end)
-        end
-        local rowX = 9
-        for _, cVal in ipairs(gameState.tableRows[i]) do
-            createCard(boardArea, rowX, rowY, cVal, nil, false)
-            rowX = rowX + 5
-        end
-    end
-end
-
-local function updateInfoUI()
-    infoArea:removeChild()
-    infoArea:addLabel():setPosition(2, 2):setText("Current Turn:")
-
-    local x = 14
-    for _, entry in ipairs(gameState.turnCards) do
-        local bg = colors.lightGray
-        if entry.id == os.getComputerID() then bg = colors.green end
-        infoArea:addButton():setPosition(x, 1):setSize(4, 3):setBackground(bg):setText(tostring(entry.card))
-        x = x + 5
-    end
-
-    statusLabel:setText("Phase: " .. gameState.gamePhase)
-
-    if gameState.waitingTarget then
-        infoArea:addLabel():setPosition(2, 4):setForeground(colors.magenta)
-            :setText("Waiting P" .. gameState.waitingTarget .. " to choose row...")
     end
 end
 
@@ -410,6 +412,7 @@ handlers["sync_lobbyUpdate"] = function(msg)
         gameState.gamePhase = "LOBBY"
         menuFrame.visible = false
         roomFrame.visible = true
+        basalt.setActiveFrame(roomFrame, true)
     end
     lblRoomID:setText("Room: " .. tostring(SERVER_ID))
     lblPlayerCount:setText("Players: " .. msg.count .. " connected")
@@ -424,7 +427,7 @@ end
 
 -- [游戏通用]
 handlers["msg_toast"] = function(msg)
-    showToast(msg.msg, 5, colors.orange)
+    showToast(msg.msg, 2, colors.orange)
 end
 
 handlers["ev_gameStart"] = function(msg)
@@ -433,11 +436,11 @@ handlers["ev_gameStart"] = function(msg)
     gameState.tableRows = msg.rows
     if msg.roundReset then
         gameState.turnCards = {}
-        gameState.hand = {}
         gameState.waitingTarget = nil
     end
     roomFrame.visible = false
     gameFrame.visible = true
+    basalt.setActiveFrame(gameFrame, true)
     refreshAll()
 end
 
@@ -469,7 +472,7 @@ handlers["sync_updateBoard"] = function(msg)
 end
 
 handlers["sync_scoreUpdate"] = function(msg)
-    scoreListFrame:removeChild()
+    scoreListFrame:clear()
     local sorted = {}
     for _, entry in ipairs(msg.scores) do
         table.insert(sorted, entry)
@@ -498,7 +501,7 @@ handlers["req_rowChoice"] = function(msg)
     gameState.tableRows = msg.rows
     gameState.waitingTarget = nil
     gameState.selectedRowIdx = 1
-    showToast("Choose a Row!", 5, colors.red)
+    showToast("Choose a Row!", 2, colors.red)
     refreshAll()
 end
 

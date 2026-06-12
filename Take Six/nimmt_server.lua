@@ -174,16 +174,16 @@ local function net_loop()
             if not gameState.players[id] then
                 gameState.players[id] = { id = id, score = 66, hand = {} }
                 print("Player " .. id .. " joined.")
+                -- 广播当前人数
+                local count = 0
+                for _ in pairs(gameState.players) do count = count + 1 end
+                rednet.broadcast({ type = "sync_lobbyUpdate", count = count }, PROTOCOL)
                 -- 如果是第一个人，设为房主
                 if gameState.host_id == nil then
                     gameState.host_id = id
                     print("Player " .. id .. " is now the HOST.")
                     rednet.send(id, { type = "ev_setHost" }, PROTOCOL) -- 告诉客户端你是房主
                 end
-                -- 广播当前人数
-                local count = 0
-                for _ in pairs(gameState.players) do count = count + 1 end
-                rednet.broadcast({ type = "sync_lobbyUpdate", count = count }, PROTOCOL)
             end
 
             -- 游戏开始
