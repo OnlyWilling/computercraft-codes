@@ -2,28 +2,31 @@ local modem = peripheral.find("modem")
 if not modem then error("No Wireless Modem found") end
 rednet.open(peripheral.getName(modem))
 
-local utils          = require("utils")
-local core           = require("nimmt_core")
-local basalt         = require("basalt")
+local utils               = require("utils")
+local core                = require("nimmt_core")
+local basalt              = require("basalt")
 
-local PROTOCOL       = "NIMMT"
-local CONFIG_FILE    = "./nimmt.cfg"
-local BIMG_PATH      = "./bimg/nimmt_logo.bimg"
-local SERVER_ID      = nil
+local PROTOCOL            = "NIMMT"
+local CONFIG_FILE         = "./nimmt.cfg"
+local BIMG_PATH           = "./bimg/nimmt_logo.bimg"
+local SERVER_ID           = nil
+local PLAYER_COLORS = { colors.red, colors.orange, colors.yellow, colors.green, colors.cyan, colors.blue, colors.purple }
 
-local default_config = { lastServerID = nil, debug = false }
-local config         = utils.loadConfig(default_config, CONFIG_FILE)
+local default_config      = { lastServerID = nil, debug = false }
+
+local playerColorMap = {}   -- PC ID → {localID, color} 映射表
+local config              = utils.loadConfig(default_config, CONFIG_FILE)
 
 local timerLastServerMsg  = 0 -- os.clock() 时间戳，连接时初始化，用于心跳超时检测
 
 -- 待定连接状态：doConnect 后先不设置 SERVER_ID，收到 sync_lobbyUpdate 才确认
-local pendingServerID    = nil
+local pendingServerID     = nil
 local timerPendingConnect = nil
 
 ----------------------------------------------
 -- 客户端状态
 ----------------------------------------------
-local gameState      = {
+local gameState           = {
     gamePhase       = "MENU",
     isHost          = false,
     lobbyCount      = 0,
@@ -206,24 +209,24 @@ local gameFrame = basalt.createFrame()
     :setForeground(colors.white):setBackground(colors.black)
 gameFrame.visible = false
 
-local header = gameFrame:addFrame()
-    :setPosition(1, 1):setSize("{parent.width}", 1)
-    :setBackground(colors.blue)
+-- local header = gameFrame:addFrame()
+--     :setPosition(1, 1):setSize("{parent.width}", 1)
+--     :setBackground(colors.blue)
 
-local titleLabel = header:addLabel()
-    :setPosition(2, 1):setForeground(colors.white):setText("6 Nimmt!")
+-- local titleLabel = header:addLabel()
+--     :setPosition(2, 1):setForeground(colors.white):setText("6 Nimmt!")
 
-local statusLabel = header:addLabel()
-    :setPosition("{parent.width - 16}", 1):setForeground(colors.yellow):setText("Phase: PLAYING")
+-- local statusLabel = header:addLabel()
+-- :setPosition("{parent.width - 16}", 1):setForeground(colors.yellow):setText("Phase: PLAYING")
 
 local infoArea = gameFrame:addFrame()
-    :setPosition(1, 2):setSize("{parent.width}", 4):setBackground(colors.gray)
+    :setPosition(1, 1):setSize("{parent.width}", 3):setBackground(colors.lightGray)
 
 local boardArea = gameFrame:addFrame()
-    :setPosition(1, 6):setSize("{parent.width}", 12):setBackground(colors.black)
+    :setPosition(1, 4):setSize(36, 12):setBackground(colors.black)
 
 local handArea = gameFrame:addFrame()
-    :setPosition(1, "{parent.height - 3}"):setSize("{parent.width}", 6):setBackground(colors.black)
+    :setPosition(1, "{parent.height - 3}"):setSize("{parent.width}", 4):setBackground(colors.black)
 
 handArea:addLabel():setPosition(2, 1):setForeground(colors.lightBlue):setText("Your Hand:")
 
@@ -264,7 +267,7 @@ local scoreListFrame = scoreOverlay:addFrame()
 local function onServerDisconnected(reason)
     SERVER_ID               = nil
     pendingServerID         = nil
-    timerPendingConnect      = nil
+    timerPendingConnect     = nil
     gameState.gamePhase     = "MENU"
     gameState.isHost        = false
     gameState.lobbyCount    = 0
@@ -273,14 +276,15 @@ local function onServerDisconnected(reason)
     gameState.turnCards     = {}
     gameState.stagedCard    = nil
     gameState.waitingTarget = nil
+    playerColorMap = {}
     lblHostBadge:setText("")
-    lblWaiting.visible      = true
-    btnRoomStart.visible    = false
+    lblWaiting.visible   = true
+    btnRoomStart.visible = false
     lblRoomID:setText("Room: ---")
     lblPlayerCount:setText("Players: 0 connected")
-    gameFrame.visible       = false
-    roomFrame.visible       = false
-    menuFrame.visible       = true
+    gameFrame.visible = false
+    roomFrame.visible = false
+    menuFrame.visible = true
     basalt.setActiveFrame(menuFrame, true)
     menuStatusLbl:setForeground(colors.red):setText(reason or "Room discarded")
 end
@@ -300,7 +304,7 @@ local function showToast(msg, duration, color)
 end
 
 -- 绘制一张卡牌
-local function createCard(parent, x, y, value, onClickFunc, isSelected)
+local function createCard(parent, x, y, size_w, size_h, value, onClickFunc, isSelected)
     local bgCol = isSelected and colors.yellow or colors.white
     local fgCol = colors.black
 
@@ -316,7 +320,7 @@ local function createCard(parent, x, y, value, onClickFunc, isSelected)
     end
 
     local card = parent:addButton()
-        :setPosition(x, y):setSize(4, 3)
+        :setPosition(x, y):setSize(size_w, size_h)
         :setBackground(bgCol):setForeground(fgCol)
         :setText(tostring(value))
 
@@ -329,21 +333,26 @@ end
 -------------------------------------------------------------------------
 local function updateInfoUI()
     infoArea:clear()
-    infoArea:addLabel():setPosition(2, 1):setText("Current Turn:")
 
-    local x = 2
+    local infoX = 8
     for _, entry in ipairs(gameState.turnCards) do
-        local bg = colors.lightGray
-        if entry.id == os.getComputerID() then bg = colors.green end
-        infoArea:addButton():setPosition(x, 2):setSize(4, 3):setBackground(bg):setText(tostring(entry.card))
-        x = x + 5
+        createCard(infoArea, infoX, 1, 4, 2, entry.card, nil, false)
+        -- 玩家 ID 标签：局内 ID + 对应颜色
+        local pinfo = playerColorMap[entry.id]
+        local localID = pinfo and pinfo.localID or "?"
+        local tagColor = pinfo and pinfo.color or colors.gray
+        local txtColor = colors.black
+        infoArea:addButton():setPosition(infoX + 1, 3):setSize(2, 1)
+            :setBackground(tagColor):setForeground(txtColor)
+            :setText("P" .. tostring(localID))
+        infoX = infoX + 6
     end
 
-    statusLabel:setText("Phase: " .. gameState.gamePhase)
-
     if gameState.waitingTarget then
+        local pinfo = playerColorMap[gameState.waitingTarget]
+        local localID = pinfo and pinfo.localID or gameState.waitingTarget
         infoArea:addLabel():setPosition("{parent.width - 28}", 1):setForeground(colors.magenta)
-            :setText("Waiting P" .. gameState.waitingTarget .. " to choose row...")
+            :setText("Waiting P" .. tostring(localID) .. " to choose row...")
     end
 end
 
@@ -352,12 +361,11 @@ local function updateBoardUI()
     for i = 1, 4 do
         local rowY = 1 + (i - 1) * 3
         local lbl = boardArea:addButton()
-            :setPosition(2, rowY):setSize(5, 1)
-            :setBackground(colors.black)
-            :setForeground(gameState.gamePhase == "ROW_SELECT" and colors.yellow or colors.gray)
+            :setPosition(2, rowY + 1):setSize(5, 1)
+            :setBackground(gameState.gamePhase == "ROW_SELECT" and colors.blue or colors.black)
+            :setForeground(gameState.gamePhase == "ROW_SELECT" and colors.white or colors.gray)
             :setText("Row " .. i)
         if gameState.gamePhase == "ROW_SELECT" then
-            lbl:setBackground(colors.blue):setForeground(colors.white)
             lbl:onClick(function()
                 rednet.send(SERVER_ID, { type = "act_chooseRow", rowIndex = i }, PROTOCOL)
                 gameState.gamePhase = "WAITING"
@@ -366,9 +374,9 @@ local function updateBoardUI()
                 updateInfoUI()
             end)
         end
-        local rowX = 9
+        local rowX = 8
         for _, cVal in ipairs(gameState.tableRows[i]) do
-            createCard(boardArea, rowX, rowY, cVal, nil, false)
+            createCard(boardArea, rowX, rowY, 4, 3, cVal, nil, false)
             rowX = rowX + 5
         end
     end
@@ -381,7 +389,7 @@ local function updateHandUI()
     local handX = 2
     for _, cardVal in ipairs(gameState.hand) do
         local isSelected = (cardVal == gameState.stagedCard)
-        createCard(handArea, handX, 2, cardVal, function()
+        createCard(handArea, handX, 2, 4, 3, cardVal, function()
             if gameState.gamePhase == "PLAYING" and not gameState.stagedCard then
                 gameState.stagedCard = cardVal
                 rednet.send(SERVER_ID, { type = "act_playCard", card = cardVal }, PROTOCOL)
@@ -406,7 +414,17 @@ local handlers = {}
 
 -- [大厅逻辑]
 handlers["sync_lobbyUpdate"] = function(msg)
-    gameState.lobbyCount = msg.count
+    -- 构建玩家颜色映射表
+    if msg.playerList then
+        playerColorMap = {}
+        for i, pcID in ipairs(msg.playerList) do
+            playerColorMap[pcID] = {
+                localID = i,
+                color = PLAYER_COLORS[i] or colors.gray
+            }
+        end
+    end
+    gameState.lobbyCount = msg.playerList and #msg.playerList or 0
     -- 首次收到 lobbyUpdate，从菜单切换到房间大厅
     if gameState.gamePhase == "MENU" then
         gameState.gamePhase = "LOBBY"
@@ -415,7 +433,7 @@ handlers["sync_lobbyUpdate"] = function(msg)
         basalt.setActiveFrame(roomFrame, true)
     end
     lblRoomID:setText("Room: " .. tostring(SERVER_ID))
-    lblPlayerCount:setText("Players: " .. msg.count .. " connected")
+    lblPlayerCount:setText("Players: " .. gameState.lobbyCount .. " connected")
 end
 
 handlers["ev_setHost"] = function(msg)
@@ -431,6 +449,16 @@ handlers["msg_toast"] = function(msg)
 end
 
 handlers["ev_gameStart"] = function(msg)
+    -- 游戏开始时也更新玩家颜色映射（确保游戏阶段映射正确）
+    if msg.playerList then
+        playerColorMap = {}
+        for i, pcID in ipairs(msg.playerList) do
+            playerColorMap[pcID] = {
+                localID = i,
+                color = PLAYER_COLORS[i] or colors.gray
+            }
+        end
+    end
     scoreOverlay.visible = false
     gameState.gamePhase = "PLAYING"
     gameState.tableRows = msg.rows
@@ -460,7 +488,7 @@ handlers["sync_updateHand"] = function(msg)
 end
 
 handlers["sync_turnSummary"] = function(msg)
-    gameState.turnCards = msg.cards
+    gameState.turnCards = msg.turnCards
     gameState.stagedCard = nil
     gameState.isLocked = false
     updateInfoUI()
@@ -479,12 +507,14 @@ handlers["sync_scoreUpdate"] = function(msg)
     end
     table.sort(sorted, function(a, b) return a.score > b.score end)
     for i, entry in ipairs(sorted) do
+        local pinfo = playerColorMap[entry.id]
+        local localID = pinfo and pinfo.localID or entry.id
         local isMe = (entry.id == os.getComputerID())
-        local fg = isMe and colors.yellow or colors.grey
+        local fg = isMe and colors.yellow or (pinfo and pinfo.color or colors.grey)
         scoreListFrame:addLabel()
             :setPosition(1, i)
             :setForeground(fg)
-            :setText(string.format("P%-5s %2d", tostring(entry.id), entry.score))
+            :setText(string.format("P%-5s %2d", tostring(localID), entry.score))
     end
     scoreFooterLbl:setText("Next round starting...")
     scoreOverlay.visible = true

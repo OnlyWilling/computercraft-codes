@@ -7,14 +7,15 @@ local MAX_PLAYERS = 7    -- 牛头王支持 2-10 人，这里设7
 local MAX_BULLHEADS = 66 -- 默认模式最大吃墩牛头数
 local gameState = {
     phase = "LOBBY",
-    host_id = nil,             -- 房主ID (第一个加入的人)
+    hostID = nil,              -- 房主ID (第一个加入的人)
     rows = { {}, {}, {}, {} }, -- 4行
     players = {},              -- 玩家数据
-    turn_selections = {},      -- 当前轮次玩家选中的牌
-    turn_cards = {},           -- 当前轮次玩家打出的牌
+    playerOrder = {},          -- 玩家加入顺序（用于分配 localIndex）
+    turnSelections = {},       -- 当前轮次玩家选中的牌
+    turnCards = {},            -- 当前轮次玩家打出的牌
 
-    blocking_player = nil,     -- 当前卡住游戏、正在思考选行的玩家ID
-    blocking_card = nil,       -- 当前卡住的那张牌的数据结构
+    blockingPlayer = nil,      -- 当前卡住游戏、正在思考选行的玩家ID
+    blockingCard = nil,        -- 当前卡住的那张牌的数据结构
 }
 
 
@@ -38,6 +39,11 @@ local function hasCard(hand, cardVal)
     return nil
 end
 
+local function localID(pid) 
+    return gameState.players[pid] and gameState.players[pid].localIndex or pid
+end
+
+
 -- 开启新的一轮（重新发牌）
 local function startNewRound()
     print("Starting NEW ROUND...")
@@ -55,7 +61,7 @@ local function startNewRound()
 
     gameState.phase = "SELECTION"
     -- 广播包含 "roundReset=true" 告诉客户端清空上一轮的显示
-    rednet.broadcast({ type = "ev_gameStart", rows = gameState.rows, roundReset = true }, PROTOCOL)
+    rednet.broadcast({ type = "ev_gameStart", rows = gameState.rows, roundReset = true, playerList = gameState.playerOrder }, PROTOCOL)
     rednet.broadcast({ type = "msg_toast", msg = "--- NEW ROUND STARTED ---" }, PROTOCOL)
 end
 
@@ -63,7 +69,7 @@ end
 -- 核心逻辑：放置牌的算法 (牛头王精髓)
 ----------------------------------------------
 local function resolveTurn()
-    if #gameState.turn_cards == 0 then
+    if #gameState.turnCards == 0 then
         os.sleep(1)
         local anyPlayerID = next(gameState.players)
         if anyPlayerID and #gameState.players[anyPlayerID].hand == 0 then
@@ -73,7 +79,7 @@ local function resolveTurn()
             local isGameOver = false
             local scores = {}
             for pid, p in pairs(gameState.players) do
-                table.insert(scores, { id = pid, score = p.score })
+                table.insert(scores, { id = pid, localIndex = p.localIndex, score = p.score })
                 if p.score >= MAX_BULLHEADS then isGameOver = true end
             end
 
@@ -94,7 +100,7 @@ local function resolveTurn()
         return
     end
 
-    local currentPlay = gameState.turn_cards[1]
+    local currentPlay = gameState.turnCards[1]
     local card = currentPlay.card
     local pid = currentPlay.id
 
@@ -118,9 +124,9 @@ local function resolveTurn()
     -- 情况A: 牌比所有行的最后一张都小
     if bestRowIndex == -1 then
         gameState.phase = "WAITING_CHOICE"
-        gameState.blocking_player = pid
-        gameState.blocking_card = card
-        print("Waiting for Player " .. pid .. " to choose row...")
+        gameState.blockingPlayer = pid
+        gameState.blockingCard = card
+        print("Waiting for Player " .. localID(pid) .. " to choose row...")
         rednet.send(pid, {
             type = "req_rowChoice",
             card = card,
@@ -133,12 +139,12 @@ local function resolveTurn()
         if #targetRow >= 5 then
             local penalty = core.getRowBullHeads(targetRow)
             gameState.players[pid].score = gameState.players[pid].score - penalty
-            print("Player " .. pid .. " exploded row " .. bestRowIndex .. " (-" .. penalty .. ")")
+            print("Player " .. localID(pid) .. " exploded row " .. bestRowIndex .. " (-" .. penalty .. ")")
 
             gameState.rows[bestRowIndex] = { card }
             rednet.broadcast({
                 type = "msg_toast",
-                msg = "P" .. pid .. " ate " .. penalty .. " heads!"
+                msg = "P" .. localID(pid) .. " ate " .. penalty .. " heads!"
             }, PROTOCOL)
         else
             table.insert(targetRow, card)
@@ -146,7 +152,7 @@ local function resolveTurn()
     end
 
     -- 广播更新后的桌面，让大家看到牌放进去了
-    table.remove(gameState.turn_cards, 1)
+    table.remove(gameState.turnCards, 1)
     rednet.broadcast({ type = "sync_updateBoard", rows = gameState.rows }, PROTOCOL)
     sleep(1)      -- 停顿一下增加紧张感
 
@@ -168,27 +174,26 @@ local function net_loop()
 
         -- 过滤非本协议事件
         if event ~= "rednet_message" or protocol ~= PROTOCOL or type(msg) ~= "table" then
-
-        -- 玩家加入
+            -- 玩家加入
         elseif msg.type == "act_joinRoom" and gameState.phase == "LOBBY" then
             if not gameState.players[id] then
-                gameState.players[id] = { id = id, score = 66, hand = {} }
-                print("Player " .. id .. " joined.")
-                -- 广播当前人数
-                local count = 0
-                for _ in pairs(gameState.players) do count = count + 1 end
-                rednet.broadcast({ type = "sync_lobbyUpdate", count = count }, PROTOCOL)
+                table.insert(gameState.playerOrder, id)
+                local idx = #gameState.playerOrder
+                gameState.players[id] = { id = id, score = 66, hand = {}, localIndex = idx }
+                print("Player " .. localID(id) .. " joined (PC id=" .. id .. ").")
+                -- 广播玩家列表（playerOrder 即为按加入顺序的 PC ID 数组）
+                rednet.broadcast({ type = "sync_lobbyUpdate", playerList = gameState.playerOrder }, PROTOCOL)
                 -- 如果是第一个人，设为房主
-                if gameState.host_id == nil then
-                    gameState.host_id = id
-                    print("Player " .. id .. " is now the HOST.")
+                if gameState.hostID == nil then
+                    gameState.hostID = id
+                    print("Player " .. localID(id) .. " is now the HOST.")
                     rednet.send(id, { type = "ev_setHost" }, PROTOCOL) -- 告诉客户端你是房主
                 end
             end
 
             -- 游戏开始
         elseif msg.type == "act_startGame" and gameState.phase == "LOBBY" then
-            if id == gameState.host_id then
+            if id == gameState.hostID then
                 print("Host started the game!")
                 startNewRound()
             else
@@ -200,24 +205,24 @@ local function net_loop()
             local card = msg.card
             if type(card) ~= "number" then return end
             if not hasCard(gameState.players[id].hand, card) then
-                print("Player " .. id .. " tried to cheat with card " .. card)
+                print("Player " .. localID(id) .. " tried to cheat with card " .. card)
                 return
             end
 
-            if gameState.turn_selections[id] ~= nil then
-                print("Player " .. id .. " changed selection to " .. card)
+            if gameState.turnSelections[id] ~= nil then
+                print("Player " .. localID(id) .. " changed selection to " .. card)
                 rednet.send(id, {
                     type = "msg_toast",
                     msg = "Selection updated to " .. card
                 }, PROTOCOL)
             else
-                print("Player " .. id .. " selected " .. card)
+                print("Player " .. localID(id) .. " selected " .. card)
             end
 
-            gameState.turn_selections[id] = card -- 存入 Map，重复发送会自动覆盖旧的
+            gameState.turnSelections[id] = card -- 存入 Map，重复发送会自动覆盖旧的
             -- 检查是否所有人都出牌了
             local readyCount = 0
-            for _ in pairs(gameState.turn_selections) do readyCount = readyCount + 1 end
+            for _ in pairs(gameState.turnSelections) do readyCount = readyCount + 1 end
             local playerCount = 0
             for _ in pairs(gameState.players) do playerCount = playerCount + 1 end
 
@@ -226,9 +231,9 @@ local function net_loop()
 
             if readyCount >= playerCount then -- 若在角逐战模式中，当有人被淘汰后，这里ready肯定就达不到playercount了，得修改逻辑
                 gameState.phase = "SHOWDOWN"
-                gameState.turn_cards = {}     -- 把 Map 转回 List 以便排序结算
-                for pid, c in pairs(gameState.turn_selections) do
-                    table.insert(gameState.turn_cards, { id = pid, card = c })
+                gameState.turnCards = {}      -- 把 Map 转回 List 以便排序结算
+                for pid, c in pairs(gameState.turnSelections) do
+                    table.insert(gameState.turnCards, { id = pid, card = c })
                     local pData = gameState.players[pid]
                     local idx = hasCard(pData.hand, c)
                     if idx then
@@ -236,30 +241,30 @@ local function net_loop()
                         rednet.send(pid, { type = "sync_updateHand", hand = pData.hand }, PROTOCOL)
                     end
                 end
-                gameState.turn_selections = {}
-                table.sort(gameState.turn_cards, function(a, b) return a.card < b.card end)
-                rednet.broadcast({ type = "sync_turnSummary", cards = gameState.turn_cards }, PROTOCOL)
+                gameState.turnSelections = {}
+                table.sort(gameState.turnCards, function(a, b) return a.card < b.card end)
+                rednet.broadcast({ type = "sync_turnSummary", turnCards = gameState.turnCards }, PROTOCOL)
                 os.sleep(1.5) -- 稍微停顿让玩家看清大家出了什么
                 resolveTurn() -- 结算本轮
             end
         elseif msg.type == "act_chooseRow" and gameState.phase == "WAITING_CHOICE" then
-            if id ~= gameState.blocking_player then return end
+            if id ~= gameState.blockingPlayer then return end
 
             local rowIdx = msg.rowIndex
             if type(rowIdx) ~= "number" or rowIdx < 1 or rowIdx > 4 then return end
-            print("Player " .. id .. " chose row " .. rowIdx)
+            print("Player " .. localID(id) .. " chose row " .. rowIdx)
             local penalty = core.getRowBullHeads(gameState.rows[rowIdx])
             gameState.players[id].score = gameState.players[id].score - penalty
             rednet.broadcast({
                 type = "msg_toast",
-                msg = "P" .. id .. " chose row " .. rowIdx .. " (-" .. penalty .. ")"
+                msg = "P" .. localID(id) .. " chose row " .. rowIdx .. " (-" .. penalty .. ")"
             }, PROTOCOL)
 
-            gameState.rows[rowIdx] = { gameState.blocking_card }
-            gameState.blocking_player = nil
-            gameState.blocking_card = nil
+            gameState.rows[rowIdx] = { gameState.blockingCard }
+            gameState.blockingPlayer = nil
+            gameState.blockingCard = nil
 
-            table.remove(gameState.turn_cards, 1)
+            table.remove(gameState.turnCards, 1)
             rednet.broadcast({ type = "sync_updateBoard", rows = gameState.rows }, PROTOCOL)
 
             resolveTurn()
