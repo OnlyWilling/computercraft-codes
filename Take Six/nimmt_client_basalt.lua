@@ -209,16 +209,6 @@ local gameFrame = basalt.createFrame()
     :setForeground(colors.white):setBackground(colors.black)
 gameFrame.visible = false
 
--- local header = gameFrame:addFrame()
---     :setPosition(1, 1):setSize("{parent.width}", 1)
---     :setBackground(colors.blue)
-
--- local titleLabel = header:addLabel()
---     :setPosition(2, 1):setForeground(colors.white):setText("6 Nimmt!")
-
--- local statusLabel = header:addLabel()
--- :setPosition("{parent.width - 16}", 1):setForeground(colors.yellow):setText("Phase: PLAYING")
-
 local infoArea = gameFrame:addFrame()
     :setPosition(1, 1):setSize("{parent.width}", 3):setBackground(colors.lightGray)
 
@@ -241,24 +231,37 @@ local toastLabel = toastFrame:addLabel()
 
 -- 分数展示覆盖层（轮末显示，z=8 低于 toast）
 local scoreOverlay = gameFrame:addFrame()
-    :setPosition("{math.floor(parent.width / 2) - 17}", "{math.floor(parent.height / 2) - 5}"):setZ(8):setSize(35, 11)
+    :setPosition(38, 4):setZ(8):setSize(14, 12)
     :setBackground(colors.gray)
-scoreOverlay.visible = false
 
 scoreOverlay:addLabel()
-    :setPosition(2, 1)
+    :setPosition(1, 1)
     :setForeground(colors.yellow)
-    :setText("=== Round Scores ===")
+    :setText("= Scoreboard =")
 
-local scoreFooterLbl = scoreOverlay:addLabel()
-    :setPosition(2, 10)
-    :setForeground(colors.lightGray)
-    :setText("Next round starting...")
+local scoreFooterLbl1 = scoreOverlay:addLabel()
+    :setPosition(1, "{parent.height - 2}")
+    :setForeground(colors.orange)
+    :setText("6 Nimmt")
+
+local scoreFooterLbl2 = scoreOverlay:addLabel()
+    :setPosition(1, "{parent.height - 1}")
+    :setForeground(colors.blue)
+    :setText("Players:")
+
+local scoreFooterLbl3 = scoreOverlay:addLabel()
+    :setPosition(1, "{parent.height}")
+    :setForeground(colors.magenta)
+    :setText("Phase: PLAYING")
 
 local scoreListFrame = scoreOverlay:addFrame()
-    :setPosition(2, 3)
-    :setSize(31, 7)
+    :setPosition(1, 2):setSize("{parent.width}", "{parent.height - 4}")
     :setBackground(colors.gray)
+
+scoreListFrame:addLabel()
+    :setPosition(1, "{parent.height}")
+    :setForeground(colors.yellow)
+    :setText("==============")
 
 -------------------------------------------------------------------------
 -- 断线重置（断线/房间解散时调用，重置所有状态并退回菜单）
@@ -459,7 +462,6 @@ handlers["ev_gameStart"] = function(msg)
             }
         end
     end
-    scoreOverlay.visible = false
     gameState.gamePhase = "PLAYING"
     gameState.tableRows = msg.rows
     if msg.roundReset then
@@ -505,19 +507,24 @@ handlers["sync_scoreUpdate"] = function(msg)
     for _, entry in ipairs(msg.scores) do
         table.insert(sorted, entry)
     end
-    table.sort(sorted, function(a, b) return a.score > b.score end)
+    table.sort(sorted, function(a, b)
+        if a.score ~= b.score then return a.score > b.score end
+        return (a.localIndex or 0) < (b.localIndex or 0)
+    end)
     for i, entry in ipairs(sorted) do
         local pinfo = playerColorMap[entry.id]
-        local localID = pinfo and pinfo.localID or entry.id
+        local localID = pinfo and pinfo.localID or entry.localIndex or "?"
+        local color = pinfo and pinfo.color or colors.gray
         local isMe = (entry.id == os.getComputerID())
-        local fg = isMe and colors.yellow or (pinfo and pinfo.color or colors.grey)
-        scoreListFrame:addLabel()
-            :setPosition(1, i)
-            :setForeground(fg)
-            :setText(string.format("P%-5s %2d", tostring(localID), entry.score))
+        -- 彩色 P-tag 按钮
+        scoreListFrame:addButton():setPosition(2, i):setSize(2, 1)
+            :setBackground(color):setForeground(colors.black):setText("P" .. tostring(localID))
+        -- 分数文字
+        scoreListFrame:addLabel():setPosition(6, i)
+            :setForeground(isMe and colors.yellow or colors.white)
+            :setText(tostring(entry.score))
     end
-    scoreFooterLbl:setText("Next round starting...")
-    scoreOverlay.visible = true
+    -- scoreFooterLbl3:setText("Phase: ROUND OVER")
 end
 
 handlers["ev_waitingStatus"] = function(msg)
@@ -542,18 +549,19 @@ handlers["ev_newTurn"] = function(msg)
     gameState.stagedCard = nil
     gameState.turnCards = {}
     gameState.waitingTarget = nil
+    scoreFooterLbl3:setText("Phase: PLAYING")
     refreshAll()
 end
 
 handlers["ev_roundOver"] = function(msg)
     gameState.gamePhase = "ROUND_OVER"
     gameState.stagedCard = nil
+    scoreFooterLbl3:setText("Phase: ROUND OVER")
 end
 
 handlers["ev_gameOver"] = function(msg)
     gameState.gamePhase = "GAME_OVER"
-    scoreFooterLbl:setText("=== GAME OVER ===")
-    scoreOverlay.visible = true
+    scoreFooterLbl3:setText("== GAME OVER ==")
 end
 
 -- 服务器主动广播关闭（Ctrl+T / 正常关机）

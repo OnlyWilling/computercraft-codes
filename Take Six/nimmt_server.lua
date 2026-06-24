@@ -39,8 +39,16 @@ local function hasCard(hand, cardVal)
     return nil
 end
 
-local function localID(pid) 
+local function localID(pid)
     return gameState.players[pid] and gameState.players[pid].localIndex or pid
+end
+
+local function broadcastScores()
+    local scores = {}
+    for pid, p in pairs(gameState.players) do
+        table.insert(scores, { id = pid, localIndex = p.localIndex, score = p.score })
+    end
+    rednet.broadcast({ type = "sync_scoreUpdate", scores = scores }, PROTOCOL)
 end
 
 
@@ -62,7 +70,8 @@ local function startNewRound()
     gameState.phase = "SELECTION"
     -- 广播包含 "roundReset=true" 告诉客户端清空上一轮的显示
     rednet.broadcast({ type = "ev_gameStart", rows = gameState.rows, roundReset = true, playerList = gameState.playerOrder }, PROTOCOL)
-    rednet.broadcast({ type = "msg_toast", msg = "--- NEW ROUND STARTED ---" }, PROTOCOL)
+    broadcastScores()
+    rednet.broadcast({ type = "msg_toast", msg = "=== NEW ROUND STARTED ===" }, PROTOCOL)
 end
 
 ----------------------------------------------
@@ -77,14 +86,11 @@ local function resolveTurn()
             gameState.phase = "ROUND_OVER"
             rednet.broadcast({ type = "ev_roundOver" }, PROTOCOL)
             local isGameOver = false
-            local scores = {}
             for pid, p in pairs(gameState.players) do
-                table.insert(scores, { id = pid, localIndex = p.localIndex, score = p.score })
                 if p.score >= MAX_BULLHEADS then isGameOver = true end
             end
 
-            -- 广播当前分数榜
-            rednet.broadcast({ type = "sync_scoreUpdate", scores = scores }, PROTOCOL)
+            broadcastScores()
             os.sleep(3) -- 展示分数
 
             if isGameOver then
@@ -139,6 +145,7 @@ local function resolveTurn()
         if #targetRow >= 5 then
             local penalty = core.getRowBullHeads(targetRow)
             gameState.players[pid].score = gameState.players[pid].score - penalty
+            broadcastScores()
             print("Player " .. localID(pid) .. " exploded row " .. bestRowIndex .. " (-" .. penalty .. ")")
 
             gameState.rows[bestRowIndex] = { card }
@@ -227,7 +234,7 @@ local function net_loop()
             for _ in pairs(gameState.players) do playerCount = playerCount + 1 end
 
             -- 可选：广播进度给所有人（如 "Waiting for players: 5/7"）
-            rednet.broadcast({ type = "sync_statusUpdate", current = readyCount, total = playerCount }, PROTOCOL)
+            -- rednet.broadcast({ type = "sync_statusUpdate", current = readyCount, total = playerCount }, PROTOCOL)
 
             if readyCount >= playerCount then -- 若在角逐战模式中，当有人被淘汰后，这里ready肯定就达不到playercount了，得修改逻辑
                 gameState.phase = "SHOWDOWN"
@@ -255,6 +262,7 @@ local function net_loop()
             print("Player " .. localID(id) .. " chose row " .. rowIdx)
             local penalty = core.getRowBullHeads(gameState.rows[rowIdx])
             gameState.players[id].score = gameState.players[id].score - penalty
+            broadcastScores()
             rednet.broadcast({
                 type = "msg_toast",
                 msg = "P" .. localID(id) .. " chose row " .. rowIdx .. " (-" .. penalty .. ")"
