@@ -10,11 +10,12 @@ local PROTOCOL            = "NIMMT"
 local CONFIG_FILE         = "./nimmt.cfg"
 local BIMG_PATH           = "./bimg/nimmt_logo.bimg"
 local SERVER_ID           = nil
-local PLAYER_COLORS = { colors.red, colors.orange, colors.yellow, colors.green, colors.cyan, colors.blue, colors.purple }
+local PLAYER_COLORS       = { colors.red, colors.orange, colors.yellow, colors.green, colors.cyan, colors.blue, colors
+    .purple }
 
 local default_config      = { lastServerID = nil, debug = false }
 
-local playerColorMap = {}   -- PC ID → {localID, color} 映射表
+local playerColorMap      = {} -- PC ID → {localID, color} 映射表
 local config              = utils.loadConfig(default_config, CONFIG_FILE)
 
 local timerLastServerMsg  = 0 -- os.clock() 时间戳，连接时初始化，用于心跳超时检测
@@ -39,6 +40,8 @@ local gameState           = {
     hand            = {},
     tableRows       = { {}, {}, {}, {} },
     turnCards       = {},
+    isAFK           = false,
+    turnTimeLeft    = 0,
 }
 
 ----------------------------------------------
@@ -263,6 +266,12 @@ scoreListFrame:addLabel()
     :setForeground(colors.yellow)
     :setText("==============")
 
+-- 回合倒计时标签（gameFrame 顶层，右上角）
+local turnTimeLabel = gameFrame:addLabel()
+    :setPosition("{parent.width - 9}", 1):setZ(8)
+    :setForeground(colors.magenta)
+    :setText("")
+
 -------------------------------------------------------------------------
 -- 断线重置（断线/房间解散时调用，重置所有状态并退回菜单）
 -- 注意：定义在 UI 变量之后才会添加
@@ -279,7 +288,9 @@ local function onServerDisconnected(reason)
     gameState.turnCards     = {}
     gameState.stagedCard    = nil
     gameState.waitingTarget = nil
-    playerColorMap = {}
+    gameState.isAFK         = false
+    gameState.turnTimeLeft  = 0
+    playerColorMap          = {}
     lblHostBadge:setText("")
     lblWaiting.visible   = true
     btnRoomStart.visible = false
@@ -296,14 +307,39 @@ end
 -- UI 组件封装 (Helper Functions)
 -------------------------------------------------------------------------
 
-local function showToast(msg, duration, color)
+local toastButton = nil -- AFK toast 的按钮引用，用于清理
+
+local function showToast(msg, duration, color, buttonConfig)
+    if gameState.isAFK then return end -- AFK状态下 不显示其他toast msg
+
+    if toastButton and not toastButton._destroyed then
+        toastButton:destroy() -- 清理旧按钮
+        toastButton = nil
+    end
+
     toastFrame:setBackground(color or colors.red)
     toastLabel:setText(msg)
+    toastFrame:setSize(26, buttonConfig and 6 or 4)
     toastFrame.visible = true
-    basalt.schedule(function()
-        os.sleep(duration or 2)
-        toastFrame.visible = false
-    end)
+
+    if buttonConfig then
+        toastButton = toastFrame:addButton()
+            :setPosition(buttonConfig.x or 9, buttonConfig.y or 4)
+            :setSize(buttonConfig.w or 8, 3)
+            :setBackground(buttonConfig.bg or colors.lime)
+            :setForeground(buttonConfig.fg or colors.black)
+            :setText(buttonConfig.text or "OK")
+            :onClick(function()
+                if buttonConfig.onClick then buttonConfig.onClick() end
+            end)
+    end
+
+    if duration and duration > 0 then
+        basalt.schedule(function()
+            os.sleep(duration)
+            toastFrame.visible = false
+        end)
+    end
 end
 
 -- 绘制一张卡牌
@@ -345,7 +381,7 @@ local function updateInfoUI()
         local localID = pinfo and pinfo.localID or "?"
         local tagColor = pinfo and pinfo.color or colors.gray
         local txtColor = colors.black
-        infoArea:addButton():setPosition(infoX + 1, 3):setSize(2, 1)
+        infoArea:addButton():setPosition(infoX, 3):setSize(4, 1)
             :setBackground(tagColor):setForeground(txtColor)
             :setText("P" .. tostring(localID))
         infoX = infoX + 6
@@ -370,6 +406,7 @@ local function updateBoardUI()
             :setText("Row " .. i)
         if gameState.gamePhase == "ROW_SELECT" then
             lbl:onClick(function()
+                if gameState.isAFK then return end
                 rednet.send(SERVER_ID, { type = "act_chooseRow", rowIndex = i }, PROTOCOL)
                 gameState.gamePhase = "WAITING"
                 showToast("Row Selected", 2, colors.green)
@@ -393,7 +430,7 @@ local function updateHandUI()
     for _, cardVal in ipairs(gameState.hand) do
         local isSelected = (cardVal == gameState.stagedCard)
         createCard(handArea, handX, 2, 4, 3, cardVal, function()
-            if gameState.gamePhase == "PLAYING" and not gameState.stagedCard then
+            if gameState.gamePhase == "PLAYING" and not gameState.stagedCard and not gameState.isAFK then
                 gameState.stagedCard = cardVal
                 rednet.send(SERVER_ID, { type = "act_playCard", card = cardVal }, PROTOCOL)
                 showToast("Card Sent!", 2, colors.green)
@@ -451,6 +488,22 @@ handlers["msg_toast"] = function(msg)
     showToast(msg.msg, 2, colors.orange)
 end
 
+-- AFK 提示：复用 showToast 显示确认按钮
+handlers["msg_afk"] = function(msg)
+    gameState.isAFK = true
+    showToast("YY== AFK Confirmed==!!", nil, colors.red, {
+        text = "Continue",
+        x = 9,
+        y = 4,
+        w = 8,
+        onClick = function()
+            gameState.isAFK = false
+            rednet.send(SERVER_ID, { type = "act_afkResume" }, PROTOCOL)
+            toastFrame.visible = false
+        end
+    })
+end
+
 handlers["ev_gameStart"] = function(msg)
     -- 游戏开始时也更新玩家颜色映射（确保游戏阶段映射正确）
     if msg.playerList then
@@ -471,6 +524,7 @@ handlers["ev_gameStart"] = function(msg)
     roomFrame.visible = false
     gameFrame.visible = true
     basalt.setActiveFrame(gameFrame, true)
+    gameState.turnTimeLeft = 20
     refreshAll()
 end
 
@@ -517,14 +571,18 @@ handlers["sync_scoreUpdate"] = function(msg)
         local color = pinfo and pinfo.color or colors.gray
         local isMe = (entry.id == os.getComputerID())
         -- 彩色 P-tag 按钮
-        scoreListFrame:addButton():setPosition(2, i):setSize(2, 1)
+        scoreListFrame:addButton():setPosition(2, i):setSize(4, 1)
             :setBackground(color):setForeground(colors.black):setText("P" .. tostring(localID))
         -- 分数文字
-        scoreListFrame:addLabel():setPosition(6, i)
+        scoreListFrame:addLabel():setPosition(7, i)
             :setForeground(isMe and colors.yellow or colors.white)
             :setText(tostring(entry.score))
     end
     -- scoreFooterLbl3:setText("Phase: ROUND OVER")
+end
+
+handlers["sync_statusUpdate"] = function(msg)
+    scoreFooterLbl2:setText("Players: " .. msg.current .. "/" .. msg.total)
 end
 
 handlers["ev_waitingStatus"] = function(msg)
@@ -549,6 +607,7 @@ handlers["ev_newTurn"] = function(msg)
     gameState.stagedCard = nil
     gameState.turnCards = {}
     gameState.waitingTarget = nil
+    gameState.turnTimeLeft = 20
     scoreFooterLbl3:setText("Phase: PLAYING")
     refreshAll()
 end
@@ -556,11 +615,13 @@ end
 handlers["ev_roundOver"] = function(msg)
     gameState.gamePhase = "ROUND_OVER"
     gameState.stagedCard = nil
+    gameState.turnTimeLeft = 0
     scoreFooterLbl3:setText("Phase: ROUND OVER")
 end
 
 handlers["ev_gameOver"] = function(msg)
     gameState.gamePhase = "GAME_OVER"
+    gameState.turnTimeLeft = 0
     scoreFooterLbl3:setText("== GAME OVER ==")
 end
 
@@ -622,6 +683,19 @@ basalt.schedule(function()
         -- 已建立连接的心跳超时（10s 无任何消息）
         if SERVER_ID and (os.clock() - timerLastServerMsg) > 10 then
             onServerDisconnected("Connection lost")
+        end
+    end
+end)
+
+-- 回合倒计时更新（每 1s 递减）
+basalt.schedule(function()
+    while true do
+        os.sleep(1)
+        if gameState.turnTimeLeft > 0 then
+            gameState.turnTimeLeft = gameState.turnTimeLeft - 1
+            if turnTimeLabel and not turnTimeLabel._destroyed then
+                turnTimeLabel:setText(gameState.turnTimeLeft > 0 and "Time: " .. gameState.turnTimeLeft .. "s" or "")
+            end
         end
     end
 end)

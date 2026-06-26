@@ -55,9 +55,42 @@ local function loadBimgImage(path)
     return img
 end
 
+--- 在单行内打印包含多种颜色的文本。
+--- @param segments table 包含 {text, color} 片段的列表。
+--- @param mode string 决定打印动画的速度
+local function printColored(segments, mode)
+    mode = mode or "slow" -- default slow write
+    local oldColor = term.getTextColor()
+
+    for _, part in ipairs(segments) do
+        -- 设置颜色并打印
+        term.setTextColor(part[2])
+        if mode == "slow" then
+            textutils.slowWrite(part[1], 30)
+        else
+            term.write(part[1])
+        end
+
+        if part[1]:match("^%-%d%d:%d%d:%d%d%-$") then
+            print()
+        end
+    end
+
+    print()
+    term.setTextColor(oldColor)
+end
+
+--- 返回当前时间戳
+--- @return string res 用UTC时分制返回时间戳
+local function getTimestamp()
+    return "-" .. os.date("%H:%M:%S") .. "-"
+end
+
 return {
     -- Tools
     saveConfig = saveConfig,
     loadConfig = loadConfig,
     loadBimgImage = loadBimgImage,
+    printColored = printColored,
+    getTimestamp = getTimestamp,
 }
