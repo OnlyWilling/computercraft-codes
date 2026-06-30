@@ -1,9 +1,9 @@
 -- Import scoring.lua
-local Scoring = require("scoring")
+local scoring = require("scoring")
 
 -- 游戏状态表
 local Game = {
-    dice = {0, 0, 0, 0, 0}, -- 存储5个骰子的点数
+    dice = { 0, 0, 0, 0, 0 }, -- 存储5个骰子的点数
     rolls_left = 3,         -- 每回合剩余投掷次数
     turn = 1,               -- 当前回合数
     scorecard = {},         -- 计分板
@@ -15,12 +15,12 @@ local Game = {
 function Game:initScorecard()
     self.scorecard = {
         -- 上半部分
-        ones   = { score = 0, used = false, name = "ones" },
-        twos   = { score = 0, used = false, name = "twos" },
-        threes = { score = 0, used = false, name = "threes" },
-        fours  = { score = 0, used = false, name = "fours" },
-        fives  = { score = 0, used = false, name = "fives" },
-        sixes  = { score = 0, used = false, name = "sixes" },
+        ones            = { score = 0, used = false, name = "ones" },
+        twos            = { score = 0, used = false, name = "twos" },
+        threes          = { score = 0, used = false, name = "threes" },
+        fours           = { score = 0, used = false, name = "fours" },
+        fives           = { score = 0, used = false, name = "fives" },
+        sixes           = { score = 0, used = false, name = "sixes" },
         -- 下半部分
         three_of_a_kind = { score = 0, used = false, name = "three_of_a_kind" },
         four_of_a_kind  = { score = 0, used = false, name = "four_of_a_kind" },
@@ -67,19 +67,32 @@ end
 function Game:applyScore(category)
     if self.scorecard[category] and not self.scorecard[category].used then
         local score = 0
-        if category == "ones"   then score = Scoring.calculateUpper(self.dice, 1)
-        elseif category == "twos"   then score = Scoring.calculateUpper(self.dice, 2)
-        elseif category == "threes" then score = Scoring.calculateUpper(self.dice, 3)
-        elseif category == "fours"  then score = Scoring.calculateUpper(self.dice, 4)
-        elseif category == "fives"  then score = Scoring.calculateUpper(self.dice, 5)
-        elseif category == "sixes"  then score = Scoring.calculateUpper(self.dice, 6)
-        elseif category == "three_of_a_kind" then score = Scoring.calculateNOfAKind(self.dice, 3)
-        elseif category == "four_of_a_kind"  then score = Scoring.calculateNOfAKind(self.dice, 4)
-        elseif category == "full_house"      then score = Scoring.calculateFullHouse(self.dice)
-        elseif category == "small_straight"  then score = Scoring.calculateSmallStraight(self.dice)
-        elseif category == "large_straight"  then score = Scoring.calculateLargeStraight(self.dice)
-        elseif category == "yahtzee"         then score = Scoring.calculateYahtzee(self.dice)
-        elseif category == "chance"          then score = Scoring.sum_dice(self.dice)
+        if category == "ones" then
+            score = scoring.calculateUpper(self.dice, 1)
+        elseif category == "twos" then
+            score = scoring.calculateUpper(self.dice, 2)
+        elseif category == "threes" then
+            score = scoring.calculateUpper(self.dice, 3)
+        elseif category == "fours" then
+            score = scoring.calculateUpper(self.dice, 4)
+        elseif category == "fives" then
+            score = scoring.calculateUpper(self.dice, 5)
+        elseif category == "sixes" then
+            score = scoring.calculateUpper(self.dice, 6)
+        elseif category == "three_of_a_kind" then
+            score = scoring.calculateNOfAKind(self.dice, 3)
+        elseif category == "four_of_a_kind" then
+            score = scoring.calculateNOfAKind(self.dice, 4)
+        elseif category == "full_house" then
+            score = scoring.calculateFullHouse(self.dice)
+        elseif category == "small_straight" then
+            score = scoring.calculateSmallStraight(self.dice)
+        elseif category == "large_straight" then
+            score = scoring.calculateLargeStraight(self.dice)
+        elseif category == "yahtzee" then
+            score = scoring.calculateYahtzee(self.dice)
+        elseif category == "chance" then
+            score = scoring.sum_dice(self.dice)
         end
 
         self.scorecard[category].score = score
@@ -98,8 +111,9 @@ function Game:printScorecard()
     local upper_total = 0
     local lower_total = 0
 
-    local upper_keys = {"ones", "twos", "threes", "fours", "fives", "sixes"}
-    local lower_keys = {"three_of_a_kind", "four_of_a_kind", "full_house", "small_straight", "large_straight", "yahtzee", "chance"}
+    local upper_keys = { "ones", "twos", "threes", "fours", "fives", "sixes" }
+    local lower_keys = { "three_of_a_kind", "four_of_a_kind", "full_house", "small_straight", "large_straight", "yahtzee",
+        "chance" }
 
     print("--- Upper total ---")
     for _, key in ipairs(upper_keys) do
@@ -139,7 +153,7 @@ end
 function Game:startTurn()
     print(string.format("\n####### Turn %d #######", self.turn))
     self.rolls_left = 3
-    self.dice = {0,0,0,0,0}
+    self.dice = { 0, 0, 0, 0, 0 }
 
     -- 第一次投掷
     self:rollDice({})
@@ -148,15 +162,16 @@ function Game:startTurn()
     -- 第二、三次投掷
     for i = 1, 2 do
         if self.rolls_left > 0 then
-            print(string.format("Left %d reroll times. Enter indeices to maintain OR just enter to reroll all dices:", self.rolls_left))
+            print(string.format("Left %d reroll times. Enter indeices to maintain OR just enter to reroll all dices:",
+                self.rolls_left))
             local input = io.read()
             if input == "score" then break end -- 提前计分
-            
+
             local holds = {}
             for digit in input:gmatch("%d") do
                 table.insert(holds, tonumber(digit))
             end
-            
+
             self:rollDice(holds)
             self:printDice()
         end
@@ -165,7 +180,7 @@ function Game:startTurn()
     -- 选择计分项目
     print("\nRoll finished!! Choose one item to fill:")
     self:printScorecard()
-    
+
     while true do
         local category = io.read()
         if self:applyScore(category) then

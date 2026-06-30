@@ -23,12 +23,14 @@ local timerLastServerMsg  = 0 -- os.clock() 时间戳，连接时初始化，用
 -- 待定连接状态：doConnect 后先不设置 SERVER_ID，收到 sync_lobbyUpdate 才确认
 local pendingServerID     = nil
 local timerPendingConnect = nil
+local joinServerID        = nil -- Join 流程中缓存的服务器 ID（用于 req_roomList / act_joinRoom）
 
 ----------------------------------------------
 -- 客户端状态
 ----------------------------------------------
-local gameState           = {
+local gameState = {
     gamePhase       = "MENU",
+    roomID          = nil,  -- 当前所在房间号（由 sync_lobbyUpdate 设置）
     isHost          = false,
     lobbyCount      = 0,
     myID            = os.getComputerID(),
@@ -41,14 +43,14 @@ local gameState           = {
     tableRows       = { {}, {}, {}, {} },
     turnCards       = {},
     isAFK           = false,
-    turnTimeLeft    = 0,
+    turnTimer       = 0,
 }
 
 ----------------------------------------------
 -- 连接辅助
 ----------------------------------------------
 -- DEBUG: 记录所有 rednet 消息到文件，排查连接问题
-local function debugLog(msg)
+local function NIMMT_DEBUG(msg)
     if not config.debug then return end
     local f = fs.open(shell.resolve("./nimmt_debug.txt"), "a")
     if f then
@@ -57,9 +59,11 @@ local function debugLog(msg)
     end
 end
 
-local function doConnect(sID)
-    debugLog("doConnect to " .. tostring(sID))
-    rednet.send(sID, { type = "act_joinRoom" }, PROTOCOL)
+local function doConnect(sID, roomId)
+    NIMMT_DEBUG("doConnect to " .. tostring(sID) .. (roomId and (" room=" .. roomId) or ""))
+    local msg = { type = "act_joinRoom" }
+    if roomId then msg.roomId = roomId end
+    rednet.send(sID, msg, PROTOCOL)
     pendingServerID = sID
     timerPendingConnect = os.clock()
 end
@@ -81,7 +85,6 @@ menuFrame:addImage({
 })
     :setPosition("{parent.width / 2 - 4}", 5)
     :setForeground(colors.yellow)
-    :setText("6 Nimmt!")
 
 -- 状态提示行（连接中/错误信息）
 local menuStatusLbl = menuFrame:addLabel()
@@ -102,7 +105,7 @@ menuFrame:addButton()
         basalt.schedule(function()
             menuStatusLbl:setForeground(colors.yellow):setText("Searching...")
             local id = rednet.lookup(PROTOCOL, "NIMMT_SERVER")
-            debugLog("lookup result: " .. tostring(id))
+            NIMMT_DEBUG("lookup result: " .. tostring(id))
             if not id and config.lastServerID then
                 id = config.lastServerID
             end
@@ -130,42 +133,86 @@ menuFrame:addButton()
     :setBackground(colors.blue):setForeground(colors.white)
     :setText("Join Game")
     :onClick(function()
-        joinModal.visible = true
+        basalt.schedule(function()
+            joinServerID = rednet.lookup(PROTOCOL, "NIMMT_SERVER")
+            if not joinServerID and config.lastServerID then
+                joinServerID = config.lastServerID
+            end
+            if not joinServerID then
+                menuStatusLbl:setForeground(colors.red):setText("Server not found!")
+                return
+            end
+            rednet.send(joinServerID, { type = "req_roomList" }, PROTOCOL)
+            joinModal.visible = true
+        end)
     end)
 
--- Join Game 模态输入框（默认隐藏，z=2 浮在按钮上）
+-- 可用房间列表缓存（供 Connect 按钮读取选中房间的 ID）
+local availableRooms = {}
+
+-- Join Game 模态框（房间列表，默认隐藏，z=4 浮在按钮上）
 joinModal = menuFrame:addFrame()
-    :setPosition("{math.floor(parent.width / 2) - 11}", "{math.floor(parent.height / 2) - 3}"):setSize(24, 7)
-    :setBackground(colors.gray):setZ(2)
-    :setBackground(colors.gray)
+    :setPosition("{math.floor(parent.width / 2) - 12}", "{math.floor(parent.height / 2) - 7}")
+    :setSize(26, 15)
+    :setBackground(colors.gray):setZ(4)
 joinModal.visible = false
 
-joinModal:addLabel():setPosition(3, 2):setForeground(colors.white):setText("Enter Server ID:")
+joinModal:addLabel()
+    :setPosition(3, 2)
+    :setForeground(colors.white)
+    :setText("Available Rooms:")
 
-local inputServerID = joinModal:addInput({
-        placeholder      = "e.g. 42",
-        placeholderColor = colors.lightGray,
+local roomList = joinModal:addList({
+        selectable      = true,
+        multiSelection  = false,
     })
-    :setPosition(3, 4):setSize(19, 1)
+    :setPosition(3, 3):setSize(21, 7)
     :setBackground(colors.black):setForeground(colors.white)
+    :setSelectedBackground(colors.blue):setSelectedForeground(colors.white)
 
-joinModal:addButton():setPosition(3, 6):setSize(8, 1)
-    :setBackground(colors.red):setForeground(colors.white):setText("Cancel")
-    :onClick(function() joinModal.visible = false end)
-
-joinModal:addButton():setPosition(13, 6):setSize(9, 1)
-    :setBackground(colors.lime):setForeground(colors.black):setText("Connect")
+joinModal:addButton()
+    :setPosition(3, 11):setSize(7, 1)
+    :setBackground(colors.orange):setForeground(colors.white)
+    :setText("Refresh")
     :onClick(function()
-        if pendingServerID then return end
-        local sID = tonumber(inputServerID:getText())
-        if sID then
-            joinModal.visible = false
-            menuStatusLbl:setForeground(colors.yellow):setText("Connecting to " .. sID .. "...")
-            doConnect(sID)
+        if not joinServerID then
+            basalt.schedule(function()
+                joinServerID = rednet.lookup(PROTOCOL, "NIMMT_SERVER")
+                if joinServerID then
+                    roomList:clear(); roomList:addItem("Loading...")
+                    rednet.send(joinServerID, { type = "req_roomList" }, PROTOCOL)
+                end
+            end)
         else
-            menuStatusLbl:setForeground(colors.red):setText("Invalid ID!")
+            roomList:clear(); roomList:addItem("Loading...")
+            basalt.schedule(function()
+                rednet.send(joinServerID, { type = "req_roomList" }, PROTOCOL)
+            end)
         end
     end)
+
+joinModal:addButton()
+    :setPosition(12, 11):setSize(7, 1)
+    :setBackground(colors.lime):setForeground(colors.black)
+    :setText("Connect")
+    :onClick(function()
+        if pendingServerID then return end
+        local idx = roomList:getSelectedIndex()
+        if not idx or not availableRooms[idx] then
+            menuStatusLbl:setForeground(colors.red):setText("Select a room first!")
+            return
+        end
+        joinModal.visible = false
+        local roomId = availableRooms[idx].id
+        menuStatusLbl:setForeground(colors.yellow):setText("Joining Room #" .. roomId .. "...")
+        doConnect(joinServerID, roomId)
+    end)
+
+joinModal:addButton()
+    :setPosition(3, 13):setSize(8, 1)
+    :setBackground(colors.red):setForeground(colors.white)
+    :setText("Cancel")
+    :onClick(function() joinModal.visible = false end)
 
 -- ========================
 -- [房间大厅] roomFrame
@@ -267,8 +314,8 @@ scoreListFrame:addLabel()
     :setText("==============")
 
 -- 回合倒计时标签（gameFrame 顶层，右上角）
-local turnTimeLabel = gameFrame:addLabel()
-    :setPosition("{parent.width - 9}", 1):setZ(8)
+local turnTimer = gameFrame:addLabel()
+    :setPosition("{parent.width - 9}", 1):setZ(10)
     :setForeground(colors.magenta)
     :setText("")
 
@@ -278,9 +325,11 @@ local turnTimeLabel = gameFrame:addLabel()
 -------------------------------------------------------------------------
 local function onServerDisconnected(reason)
     SERVER_ID               = nil
+    joinServerID            = nil
     pendingServerID         = nil
     timerPendingConnect     = nil
     gameState.gamePhase     = "MENU"
+    gameState.roomID        = nil
     gameState.isHost        = false
     gameState.lobbyCount    = 0
     gameState.hand          = {}
@@ -289,7 +338,7 @@ local function onServerDisconnected(reason)
     gameState.stagedCard    = nil
     gameState.waitingTarget = nil
     gameState.isAFK         = false
-    gameState.turnTimeLeft  = 0
+    gameState.turnTimer     = 0
     playerColorMap          = {}
     lblHostBadge:setText("")
     lblWaiting.visible   = true
@@ -454,6 +503,8 @@ local handlers = {}
 
 -- [大厅逻辑]
 handlers["sync_lobbyUpdate"] = function(msg)
+    -- 保存房间号
+    if msg.roomID then gameState.roomID = msg.roomID end
     -- 构建玩家颜色映射表
     if msg.playerList then
         playerColorMap = {}
@@ -472,7 +523,8 @@ handlers["sync_lobbyUpdate"] = function(msg)
         roomFrame.visible = true
         basalt.setActiveFrame(roomFrame, true)
     end
-    lblRoomID:setText("Room: " .. tostring(SERVER_ID))
+    local roomLabel = gameState.roomID and ("Room #" .. gameState.roomID) or tostring(SERVER_ID)
+    lblRoomID:setText("Room: " .. roomLabel)
     lblPlayerCount:setText("Players: " .. gameState.lobbyCount .. " connected")
 end
 
@@ -483,6 +535,20 @@ handlers["ev_setHost"] = function(msg)
     btnRoomStart.visible = true
 end
 
+-- [房间列表查询]
+handlers["sync_roomList"] = function(msg)
+    roomList:clear()
+    availableRooms = {}
+    if not msg.rooms or #msg.rooms == 0 then
+        roomList:addItem("(No rooms available)")
+        return
+    end
+    for _, r in ipairs(msg.rooms) do
+        table.insert(availableRooms, r)
+        roomList:addItem("Room #" .. r.id .. "  (" .. r.players .. "/" .. r.maxPlayers .. ")")
+    end
+end
+
 -- [游戏通用]
 handlers["msg_toast"] = function(msg)
     showToast(msg.msg, 2, colors.orange)
@@ -490,8 +556,7 @@ end
 
 -- AFK 提示：复用 showToast 显示确认按钮
 handlers["msg_afk"] = function(msg)
-    gameState.isAFK = true
-    showToast("YY== AFK Confirmed==!!", nil, colors.red, {
+    showToast("== AFK Confirmed==", nil, colors.red, {
         text = "Continue",
         x = 9,
         y = 4,
@@ -502,6 +567,7 @@ handlers["msg_afk"] = function(msg)
             toastFrame.visible = false
         end
     })
+    gameState.isAFK = true
 end
 
 handlers["ev_gameStart"] = function(msg)
@@ -524,7 +590,7 @@ handlers["ev_gameStart"] = function(msg)
     roomFrame.visible = false
     gameFrame.visible = true
     basalt.setActiveFrame(gameFrame, true)
-    gameState.turnTimeLeft = 20
+    gameState.turnTimer = 20
     refreshAll()
 end
 
@@ -607,7 +673,7 @@ handlers["ev_newTurn"] = function(msg)
     gameState.stagedCard = nil
     gameState.turnCards = {}
     gameState.waitingTarget = nil
-    gameState.turnTimeLeft = 20
+    gameState.turnTimer = 20
     scoreFooterLbl3:setText("Phase: PLAYING")
     refreshAll()
 end
@@ -615,13 +681,13 @@ end
 handlers["ev_roundOver"] = function(msg)
     gameState.gamePhase = "ROUND_OVER"
     gameState.stagedCard = nil
-    gameState.turnTimeLeft = 0
+    gameState.turnTimer = 0
     scoreFooterLbl3:setText("Phase: ROUND OVER")
 end
 
 handlers["ev_gameOver"] = function(msg)
     gameState.gamePhase = "GAME_OVER"
-    gameState.turnTimeLeft = 0
+    gameState.turnTimer = 0
     scoreFooterLbl3:setText("== GAME OVER ==")
 end
 
@@ -639,30 +705,39 @@ end
 -- 网络事件处理
 -------------------------------------------------------------------------
 basalt.onEvent("rednet_message", function(senderID, msg, protocol)
-    debugLog(string.format("from=%s type=%s proto=%s", tostring(senderID), tostring(msg.type), tostring(protocol)))
-    if protocol == PROTOCOL then
-        -- 待定连接：收到 sync_lobbyUpdate 即确认连接成功
-        if pendingServerID and senderID == pendingServerID and msg.type == "sync_lobbyUpdate" then
-            debugLog("pending confirmed! server=" .. senderID)
-            SERVER_ID = senderID
-            timerLastServerMsg = os.clock()
-            config.lastServerID = senderID
-            utils.saveConfig(config, CONFIG_FILE)
-            pendingServerID = nil
-            timerPendingConnect = nil
-            local func = handlers[msg.type]
-            if func then func(msg) end
-            return
-        end
-        -- 已建立连接的正常消息处理
-        if senderID == SERVER_ID then
-            timerLastServerMsg = os.clock()
-            local func = handlers[msg.type]
-            if func then
-                func(msg)
-            else
-                print("Unknown msg: " .. tostring(msg.type))
-            end
+    NIMMT_DEBUG(string.format("from=%s type=%s proto=%s", tostring(senderID), tostring(msg.type), tostring(protocol)))
+    if protocol ~= PROTOCOL then return end
+
+    -- 房间列表查询响应（即使在连接前也可接收）
+    if msg.type == "sync_roomList" then
+        local func = handlers[msg.type]
+        if func then func(msg) end
+        return
+    end
+
+    -- 待定连接：收到 sync_lobbyUpdate 即确认连接成功
+    if pendingServerID and senderID == pendingServerID and msg.type == "sync_lobbyUpdate" then
+        NIMMT_DEBUG("pending confirmed! server=" .. senderID)
+        SERVER_ID = senderID
+        timerLastServerMsg = os.clock()
+        config.lastServerID = senderID
+        utils.saveConfig(config, CONFIG_FILE)
+        pendingServerID = nil
+        timerPendingConnect = nil
+        local func = handlers[msg.type]
+        if func then func(msg) end
+        return
+    end
+
+    -- 已建立连接的正常消息处理（按 roomID 过滤广播）
+    if senderID == SERVER_ID then
+        timerLastServerMsg = os.clock()
+        if msg.roomID and msg.roomID ~= gameState.roomID then return end
+        local func = handlers[msg.type]
+        if func then
+            func(msg)
+        else
+            print("Unknown msg: " .. tostring(msg.type))
         end
     end
 end)
@@ -675,7 +750,7 @@ basalt.schedule(function()
         os.sleep(2)
         -- 待定连接 4s 超时
         if pendingServerID and (os.clock() - timerPendingConnect) > 4 then
-            debugLog("pending timeout for " .. tostring(pendingServerID))
+            NIMMT_DEBUG("pending timeout for " .. tostring(pendingServerID))
             pendingServerID = nil
             timerPendingConnect = nil
             menuStatusLbl:setForeground(colors.red):setText("Connection timed out!")
@@ -691,10 +766,10 @@ end)
 basalt.schedule(function()
     while true do
         os.sleep(1)
-        if gameState.turnTimeLeft > 0 then
-            gameState.turnTimeLeft = gameState.turnTimeLeft - 1
-            if turnTimeLabel and not turnTimeLabel._destroyed then
-                turnTimeLabel:setText(gameState.turnTimeLeft > 0 and "Time: " .. gameState.turnTimeLeft .. "s" or "")
+        if gameState.turnTimer > 0 then
+            gameState.turnTimer = gameState.turnTimer - 1
+            if turnTimer and not turnTimer._destroyed then
+                turnTimer:setText(gameState.turnTimer > 0 and "Time: " .. gameState.turnTimer .. "s" or "")
             end
         end
     end

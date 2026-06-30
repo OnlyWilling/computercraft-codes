@@ -1,9 +1,7 @@
 -- 计分逻辑
-local Scoring = {}
-
 -- 统计每个点数出现的次数
 local function count_dice(dice)
-    local counts = { [1]=0, [2]=0, [3]=0, [4]=0, [5]=0, [6]=0 }
+    local counts = { [1] = 0, [2] = 0, [3] = 0, [4] = 0, [5] = 0, [6] = 0 }
     for _, value in ipairs(dice) do
         counts[value] = counts[value] + 1
     end
@@ -11,7 +9,7 @@ local function count_dice(dice)
 end
 
 -- 上半部分计分 (一点到六点)
-function Scoring.calculateUpper(dice, number)
+local function calculateUpper(dice, number)
     local total = 0
     for _, value in ipairs(dice) do
         if value == number then
@@ -22,18 +20,18 @@ function Scoring.calculateUpper(dice, number)
 end
 
 -- 三条/四条
-function Scoring.calculateNOfAKind(dice, n)
+local function calculateNOfAKind(dice, n)
     local counts = count_dice(dice)
     for _, count in pairs(counts) do
         if count >= n then
-            return Scoring.sum_dice(dice) -- 按规则，三条/四条的分数是所有骰子总和
+            return sum_dice(dice) -- 按规则，三条/四条的分数是所有骰子总和
         end
     end
     return 0
 end
 
 -- 葫芦 (三条 + 一对)
-function Scoring.calculateFullHouse(dice)
+local function calculateFullHouse(dice)
     local counts = count_dice(dice)
     local has_three = false
     local has_two = false
@@ -48,7 +46,7 @@ function Scoring.calculateFullHouse(dice)
 end
 
 -- 小顺 (4个连续的骰子)
-function Scoring.calculateSmallStraight(dice)
+local function calculateSmallStraight(dice)
     local unique_dice = {}
     local temp = {}
     for _, d in ipairs(dice) do
@@ -62,9 +60,9 @@ function Scoring.calculateSmallStraight(dice)
     if #unique_dice < 4 then return 0 end
 
     for i = 1, #unique_dice - 3 do
-        if unique_dice[i+1] == unique_dice[i] + 1 and
-           unique_dice[i+2] == unique_dice[i] + 2 and
-           unique_dice[i+3] == unique_dice[i] + 3 then
+        if unique_dice[i + 1] == unique_dice[i] + 1 and
+            unique_dice[i + 2] == unique_dice[i] + 2 and
+            unique_dice[i + 3] == unique_dice[i] + 3 then
             return 30
         end
     end
@@ -72,13 +70,13 @@ function Scoring.calculateSmallStraight(dice)
 end
 
 -- 大顺 (5个连续的骰子)
-function Scoring.calculateLargeStraight(dice)
+local function calculateLargeStraight(dice)
     local sorted_dice = {}
     for _, d in ipairs(dice) do table.insert(sorted_dice, d) end
     table.sort(sorted_dice)
 
     for i = 1, #sorted_dice - 1 do
-        if sorted_dice[i+1] ~= sorted_dice[i] + 1 then
+        if sorted_dice[i + 1] ~= sorted_dice[i] + 1 then
             return 0
         end
     end
@@ -86,7 +84,7 @@ function Scoring.calculateLargeStraight(dice)
 end
 
 -- 快艇 (5个相同的骰子)
-function Scoring.calculateYahtzee(dice)
+local function calculateYahtzee(dice)
     local counts = count_dice(dice)
     for _, count in pairs(counts) do
         if count == 5 then
@@ -97,7 +95,7 @@ function Scoring.calculateYahtzee(dice)
 end
 
 -- 计算骰子点数总和
-function Scoring.sum_dice(dice)
+local function sum_dice(dice)
     local sum = 0
     for _, value in ipairs(dice) do
         sum = sum + value
@@ -105,4 +103,12 @@ function Scoring.sum_dice(dice)
     return sum
 end
 
-return Scoring
+return {
+    calculateUpper = calculateUpper,
+    calculateNOfAKind = calculateNOfAKind,
+    calculateFullHouse = calculateFullHouse,
+    calculateSmallStraight = calculateSmallStraight,
+    calculateLargeStraight = calculateLargeStraight,
+    calculateYahtzee = calculateYahtzee,
+    sum_dice = sum_dice,
+}
