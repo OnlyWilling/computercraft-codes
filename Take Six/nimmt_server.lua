@@ -3,198 +3,148 @@
 ----------------------------------------------
 local core          = require("nimmt_core")
 local utils         = require("utils")
+local basalt        = require("basalt")
 local PROTOCOL      = "NIMMT"
 local MAX_PLAYERS   = 7  -- 牛头王支持 2-10 人，这里设7
 local MAX_BULLHEADS = 66 -- 默认模式最大吃墩牛头数
 local MAX_ROOMS     = 3  -- 最大同时房间数
 local nextRoomID    = 1
-local rooms         = {}       -- rooms[roomID] = { state = RoomState }
-local playerRoom    = {}       -- playerID → roomID（消息路由用）
+local rooms         = {} -- rooms[roomID] = { state = RoomState }
+local playerRoom    = {} -- playerID → roomID（消息路由用）
 
 local function newRoomState(roomID, hostID)
     return {
-        roomID          = roomID,
-        hostID          = hostID,
-        phase           = "LOBBY",  -- LOBBY / SELECTION / SHOWDOWN / WAITING_CHOICE / ROUND_OVER
-        rows            = { {}, {}, {}, {} },
-        players         = {},
-        playerOrder     = {},
-        turnSelections  = {},
-        turnCards       = {},
-        blockingPlayer  = nil,
-        blockingCard    = nil,
-        turnTimer       = nil,
+        roomID         = roomID,
+        hostID         = hostID,
+        phase          = "LOBBY",  -- LOBBY / SELECTION / SHOWDOWN / WAITING_CHOICE / ROUND_OVER
+        rows           = { {}, {}, {}, {} },
+        players        = {},
+        playerOrder    = {},
+        turnSelections = {},
+        turnCards      = {},
+        blockingPlayer = nil,
+        blockingCard   = nil,
+        turnTimer      = nil,
     }
 end
 
 ----------------------------------------------
--- 多窗口日志系统 (Tab 式分屏)
+-- Basalt 标签界面 (TabControl + Display)
 ----------------------------------------------
-local MAX_LOG_LINES = 200
-local logBuffers    = { main = {} }
-local activeTab     = "main"   -- "main" | 1 | 2 | 3
-local windowReady   = false
+local mainFrame = basalt.createFrame()
+    :setSize(51, 19)
+    :setBackground(colors.black)
 
--- 日志缓冲区结构: logBuffers[key] = { { text, tag, timestamp }, ... }
+local tabControl = mainFrame:addTabControl({
+    x = 1,
+    y = 1,
+    width = 51,
+    height = 17,
+    headerBackground = colors.gray,
+    activeTabBackground = colors.white,
+    activeTabTextColor = colors.black,
+})
 
-local function renderTabBar()
-    local tabs = {
-        { key = "main", label = " Main " },
-        { key = 1,     label = " Room#1 " },
-        { key = 2,     label = " Room#2 " },
-        { key = 3,     label = " Room#3 " },
-    }
+local tabDisplays = {} -- tabKey → { display = ..., win = ... }
 
-    term.setCursorPos(1, 1)
-    for _, tab in ipairs(tabs) do
-        local hasActivity = logBuffers[tostring(tab.key)] and #logBuffers[tostring(tab.key)] > 0
-        if activeTab == tab.key then
-            term.setTextColor(colors.black)
-            term.setBackgroundColor(colors.white)
-        elseif hasActivity then
-            term.setTextColor(colors.white)
-            term.setBackgroundColor(colors.gray)
-        else
-            term.setTextColor(colors.gray)
-            term.setBackgroundColor(colors.black)
-        end
-        term.write(tab.label)
-    end
-    -- 填充剩余栏位
-    term.setBackgroundColor(colors.black)
-    local _, cx = term.getCursorPos()
-    term.write(string.rep(" ", math.max(0, 51 - cx)))
+local tabConfigs = {
+    { key = "main", title = " Main " },
+    { key = "1",    title = " Room#1 " },
+    { key = "2",    title = " Room#2 " },
+    { key = "3",    title = " Room#3 " },
+}
+
+for _, cfg in ipairs(tabConfigs) do
+    local tab = tabControl:newTab(cfg.title)
+    local display = tab:addDisplay({
+        x = 1,
+        y = 1,
+        width = 49,
+        height = 15,
+        background = colors.black,
+    })
+    local win = display:getWindow()
+    win.setBackgroundColor(colors.black)
+    win.clear()
+    win.setCursorPos(1, 1)
+    tabDisplays[cfg.key] = { display = display, win = win }
 end
 
-local function renderContent()
-    local buf = logBuffers[tostring(activeTab)] or {}
+-- 状态栏
+local statusLabel = mainFrame:addLabel({
+    x = 1,
+    y = 18,
+    width = 51,
+    height = 1,
+    background = colors.blue,
+    foreground = colors.white,
+    text = " Server: NIMMT | Rooms: 0/3",
+})
 
-    -- 先清除内容区域
-    for y = 3, 18 do
-        term.setCursorPos(1, y)
-        term.setBackgroundColor(colors.black)
-        term.write(string.rep(" ", 51))
-    end
+-- Quit 按钮（点击触发 basalt.stop → 劫持版本自动通知所有客户端）
+mainFrame:addButton()
+    :setPosition(43, 19):setSize(8, 1)
+    :setBackground(colors.red):setForeground(colors.white)
+    :setText(" [Quit] ")
+    :onClick(function() basalt.stop() end)
 
-    if #buf == 0 then
-        term.setCursorPos(20, 10)
-        term.setTextColor(colors.gray)
-        term.setBackgroundColor(colors.black)
-        term.write("(No messages yet)")
-        return
-    end
-
-    local startLine = math.max(1, #buf - 15)
-    local y = 3
-
-    for i = startLine, #buf do
-        local entry = buf[i]
-        local segs = entry.segments
-
-        term.setCursorPos(1, y)
-        for _, seg in ipairs(segs) do
-            local _, cx = term.getCursorPos()
-            local remaining = 51 - cx + 1
-            if remaining <= 0 then break end
-            local displayText = seg.text
-            if #displayText > remaining then
-                displayText = displayText:sub(1, remaining)
-            end
-            if #displayText > 0 then
-                term.setTextColor(seg.color)
-                term.setBackgroundColor(colors.black)
-                term.write(displayText)
-            end
-        end
-        -- 填充行末空白
-        local _, cx = term.getCursorPos()
-        if cx <= 51 then
-            term.setTextColor(colors.white)
-            term.setBackgroundColor(colors.black)
-            term.write(string.rep(" ", 51 - cx + 1))
-        end
-        y = y + 1
-    end
-end
-
-local function renderStatusBar()
+-- 状态栏更新函数
+local function updateStatusBar()
     local active = 0
     local totalPlayers = 0
     for _, room in pairs(rooms) do
         active = active + 1
         totalPlayers = totalPlayers + #room.state.players
     end
-    local leftText  = " Server: NIMMT | Rooms: " .. active .. "/3 | Players: " .. totalPlayers
-    local rightText = " [1/2/3]Tab [0]Main "
-
-    term.setCursorPos(1, 19)
-    term.setBackgroundColor(colors.blue)
-    term.setTextColor(colors.white)
-    term.write(leftText)
-    term.setTextColor(colors.lightGray)
-    term.write(string.rep(" ", math.max(0, 51 - #leftText - #rightText)))
-    term.setCursorPos(51 - #rightText + 1, 19)
-    term.write(rightText)
-    term.setBackgroundColor(colors.black)
+    statusLabel:setText(" Server: NIMMT | Rooms: " ..
+    active .. "/3 | Players: " .. totalPlayers .. "  |  [1/2/3]Tab [0]Main")
 end
 
-local function fullRedraw()
-    term.setBackgroundColor(colors.black)
-    term.clear()
-    term.setCursorPos(1, 1)
-    renderTabBar()
-    -- 分隔线
-    term.setCursorPos(1, 2)
-    term.setTextColor(colors.gray)
-    term.setBackgroundColor(colors.black)
-    term.write(string.rep(string.char(196), 51))  -- ─ 水平分隔线
-    -- 日志内容
-    renderContent()
-    -- 底栏
-    renderStatusBar()
-    windowReady = true
-end
-
-local function setActiveTab(key)
-    activeTab = key
-    fullRedraw()
+-- 日志行间前进（超出行高则滚动）
+local function nextLine(win)
+    local _, h = win.getSize()
+    local _, y = win.getCursorPos()
+    if y >= h then
+        win.scroll(1)
+        win.setCursorPos(1, y)
+    else
+        win.setCursorPos(1, y + 1)
+    end
 end
 
 local tagColors = { Lobby = colors.lightBlue, Log = colors.yellow, Act = colors.orange, Error = colors.red }
 
--- 日志输出：写入缓冲区 + 实时刷新对应标签页的界面
+-- 日志输出：写入对应 Tab 的 Display Window（实时彩色输出 + 自动滚动）
 -- roomID = nil 表示系统消息（Main 标签）, 1/2/3 表示对应房间
+-- 每条日志拆为两行（时间戳行 + 消息行），还原原始 printColored 的换行格式
 local function log(roomID, tag, msg)
     local timestamp = utils.getTimestamp()
     local key = roomID and tostring(roomID) or "main"
+    local td = tabDisplays[key]
+    if not td then return end
+    local win = td.win
+    local tagColor = tagColors[tag] or colors.gray
 
-    -- 构建彩色段（用于绘制）+ 纯文本（用于回滚历史）
-    local segments = {}
-    table.insert(segments, { text = "[" .. tag .. "]", color = tagColors[tag] or colors.gray })
-    table.insert(segments, { text = timestamp, color = colors.gray })
+    -- Line 1: [TAG]-HH:MM:SS-
+    win.setTextColor(tagColor)
+    win.write("[" .. tag .. "]")
+    win.setTextColor(colors.gray)
+    win.write(timestamp)
+    nextLine(win)
+
+    -- Line 2: 消息正文（数字蓝色，其余白色）
+    local first = true
     for part in msg:gmatch("%S+") do
         local color = tonumber(part) and colors.blue or colors.white
-        table.insert(segments, { text = " " .. part, color = color })
+        win.setTextColor(color)
+        if first then
+            win.write(part)
+            first = false
+        else
+            win.write(" " .. part)
+        end
     end
-
-    local plainText = ""
-    for _, seg in ipairs(segments) do
-        plainText = plainText .. seg.text
-    end
-
-    if not logBuffers[key] then logBuffers[key] = {} end
-    table.insert(logBuffers[key], { text = plainText, segments = segments, tag = tag, timestamp = timestamp })
-    if #logBuffers[key] > MAX_LOG_LINES then
-        table.remove(logBuffers[key], 1)
-    end
-
-    -- 如果该标签处于激活状态，实时更新日志区域
-    if windowReady and key == tostring(activeTab) then
-        term.setBackgroundColor(colors.black)
-        renderContent()
-        renderTabBar()
-        renderStatusBar()
-    end
+    nextLine(win)
 end
 
 local function localID(pid, rs)
@@ -234,7 +184,6 @@ local function createRoom(hostID)
     local roomID = nextRoomID
     nextRoomID = nextRoomID + 1
     rooms[roomID] = { state = newRoomState(roomID, hostID) }
-    if not logBuffers[tostring(roomID)] then logBuffers[tostring(roomID)] = {} end
     log(nil, "Lobby", "Room #" .. roomID .. " created. (Host: PC " .. hostID .. ")")
     return roomID
 end
@@ -244,7 +193,9 @@ local function destroyRoom(roomID)
     local room = rooms[roomID]
     if not room then return end
     local rs = room.state
-    if rs.turnTimer then os.cancelTimer(rs.turnTimer); rs.turnTimer = nil end
+    if rs.turnTimer then
+        os.cancelTimer(rs.turnTimer); rs.turnTimer = nil
+    end
     for pid in pairs(rs.players) do
         rednet.send(pid, { type = "ev_serverClosing", msg = "Room closed" }, PROTOCOL)
         playerRoom[pid] = nil
@@ -258,11 +209,15 @@ local function removePlayerFromRoom(playerID)
     local roomID = playerRoom[playerID]
     if not roomID then return end
     local room = rooms[roomID]
-    if not room then playerRoom[playerID] = nil; return end
+    if not room then
+        playerRoom[playerID] = nil; return
+    end
     local rs = room.state
     rs.players[playerID] = nil
     for i, pid in ipairs(rs.playerOrder) do
-        if pid == playerID then table.remove(rs.playerOrder, i); break end
+        if pid == playerID then
+            table.remove(rs.playerOrder, i); break
+        end
     end
     playerRoom[playerID] = nil
     -- 移交房主
@@ -414,7 +369,8 @@ local function resolveTurn(room)
             local penalty = core.getRowBullHeads(targetRow)
             rs.players[pid].score = rs.players[pid].score - penalty
             broadcastScores(room)
-            log(rs.roomID, "Log", "Player " .. localID(pid, rs) .. " exploded row " .. bestRowIndex .. " (-" .. penalty .. ")")
+            log(rs.roomID, "Log",
+                "Player " .. localID(pid, rs) .. " exploded row " .. bestRowIndex .. " (-" .. penalty .. ")")
             rs.rows[bestRowIndex] = { card }
             roomBroadcast(room, { type = "msg_toast", msg = "P" .. localID(pid, rs) .. " ate " .. penalty .. " heads!" })
         else
@@ -487,7 +443,8 @@ local function handleTurnTimeout(room)
             local penalty = core.getRowBullHeads(rs.rows[1])
             rs.players[pid].score = rs.players[pid].score - penalty
             broadcastScores(room)
-            roomBroadcast(room, { type = "msg_toast", msg = "P" .. localID(pid, rs) .. " (AFK) chose row 1 (-" .. penalty .. ")" })
+            roomBroadcast(room,
+                { type = "msg_toast", msg = "P" .. localID(pid, rs) .. " (AFK) chose row 1 (-" .. penalty .. ")" })
             rs.rows[1] = { rs.blockingCard }
             rs.blockingPlayer = nil; rs.blockingCard = nil
             table.remove(rs.turnCards, 1)
@@ -511,7 +468,6 @@ local function handleRoomMessage(room, pid, msg)
         end
         log(rs.roomID, "Act", "Host started the game!")
         startNewRound(room)
-
     elseif msg.type == "act_playCard" and rs.phase == "SELECTION" then
         local card = msg.card
         if type(card) ~= "number" then return end
@@ -526,27 +482,30 @@ local function handleRoomMessage(room, pid, msg)
             log(rs.roomID, "Log", "Player " .. localID(pid, rs) .. " selected " .. card)
         end
         rs.turnSelections[pid] = card
-        local readyCount = 0 for _ in pairs(rs.turnSelections) do readyCount = readyCount + 1 end
-        local playerCount = 0 for _, p in pairs(rs.players) do if p.connected then playerCount = playerCount + 1 end end
+        local readyCount = 0
+        for _ in pairs(rs.turnSelections) do readyCount = readyCount + 1 end
+        local playerCount = 0
+        for _, p in pairs(rs.players) do if p.connected then playerCount = playerCount + 1 end end
         roomBroadcast(room, { type = "sync_statusUpdate", current = playerCount, total = #rs.playerOrder })
         if readyCount >= playerCount then startShowdown(room) end
-
     elseif msg.type == "act_chooseRow" and rs.phase == "WAITING_CHOICE" then
         if pid ~= rs.blockingPlayer then return end
-        if rs.turnTimer then os.cancelTimer(rs.turnTimer); rs.turnTimer = nil end
+        if rs.turnTimer then
+            os.cancelTimer(rs.turnTimer); rs.turnTimer = nil
+        end
         local rowIdx = msg.rowIndex
         if type(rowIdx) ~= "number" or rowIdx < 1 or rowIdx > 4 then return end
         log(rs.roomID, "Log", "Player " .. localID(pid, rs) .. " chose Row " .. rowIdx)
         local penalty = core.getRowBullHeads(rs.rows[rowIdx])
         rs.players[pid].score = rs.players[pid].score - penalty
         broadcastScores(room)
-        roomBroadcast(room, { type = "msg_toast", msg = "P" .. localID(pid, rs) .. " chose Row " .. rowIdx .. " (-" .. penalty .. ")" })
+        roomBroadcast(room,
+            { type = "msg_toast", msg = "P" .. localID(pid, rs) .. " chose Row " .. rowIdx .. " (-" .. penalty .. ")" })
         rs.rows[rowIdx] = { rs.blockingCard }
         rs.blockingPlayer = nil; rs.blockingCard = nil
         table.remove(rs.turnCards, 1)
         roomBroadcast(room, { type = "sync_updateBoard", rows = rs.rows })
         resolveTurn(room)
-
     elseif msg.type == "act_afkResume" then
         if rs.players[pid] then
             rs.players[pid].afk = false
@@ -554,7 +513,6 @@ local function handleRoomMessage(room, pid, msg)
             log(rs.roomID, "Log", "Player " .. localID(pid, rs) .. " resumed from AFK")
             rednet.send(pid, { type = "msg_toast", msg = "Welcome back!" }, PROTOCOL)
         end
-
     elseif msg.type == "act_leaveRoom" then
         removePlayerFromRoom(pid)
     end
@@ -607,53 +565,63 @@ local function handleRoomListRequest(playerID)
 end
 
 ----------------------------------------------
--- 网络循环
+-- Basalt 事件注册（替代 net_loop + heartbeat_loop）
 ----------------------------------------------
-local function net_loop()
-    while true do
-        local event, id, msg, protocol = os.pullEventRaw()
 
-        if event == "terminate" then
-            log(nil, "Error", "Server shutting down, notifying clients...")
-            rednet.broadcast({ type = "ev_serverClosing", msg = "Server shutdown!" }, PROTOCOL)
-            for _, room in pairs(rooms) do
-                if room.state.turnTimer then os.cancelTimer(room.state.turnTimer) end
-            end
-            return
+-- 劫持 basalt.stop()：Basalt 收到 terminate 后会直接调用它，
+-- 且不派发 onEvent("terminate", ...) 注册的回调。
+-- 在这里插入关闭广播，确保客户端收到 ev_serverClosing。
+do
+    local originalStop = basalt.stop
+    function basalt.stop()
+        log(nil, "Error", "Server shutting down, notifying clients...")
+        rednet.broadcast({ type = "ev_serverClosing", msg = "Server shutdown!" }, PROTOCOL)
+        for _, room in pairs(rooms) do
+            if room.state.turnTimer then os.cancelTimer(room.state.turnTimer) end
         end
-
-        -- 标签页切换快捷键
-        if event == "key" then
-            if id == keys.one then setActiveTab(1)
-            elseif id == keys.two then setActiveTab(2)
-            elseif id == keys.three then setActiveTab(3)
-            elseif id == keys.zero then setActiveTab("main")
-            end
-        end
-
-        -- 事件分发
-        if event == "timer" then
-            for _, room in pairs(rooms) do
-                if room.state.turnTimer == id then
-                    handleTurnTimeout(room)
-                    break
-                end
-            end
-        elseif event == "rednet_message" and protocol == PROTOCOL and type(msg) == "table" then
-            if msg.type == "act_joinRoom" then
-                handleJoinRoom(id, msg)
-            elseif msg.type == "req_roomList" then
-                handleRoomListRequest(id)
-            else
-                local room = playerRoom[id] and rooms[playerRoom[id]]
-                if not room then return end
-                handleRoomMessage(room, id, msg)
-            end
-        end
+        originalStop()
     end
 end
 
-local function heartbeat_loop()
+-- 标签页切换快捷键
+basalt.onEvent("key", function(key)
+    if key == keys.one then
+        tabControl:setActiveTab(2)
+    elseif key == keys.two then
+        tabControl:setActiveTab(3)
+    elseif key == keys.three then
+        tabControl:setActiveTab(4)
+    elseif key == keys.zero then
+        tabControl:setActiveTab(1)
+    end
+end)
+
+-- 回合倒计时
+basalt.onEvent("timer", function(timerID)
+    for _, room in pairs(rooms) do
+        if room.state.turnTimer == timerID then
+            handleTurnTimeout(room)
+            break
+        end
+    end
+end)
+
+-- Rednet 消息分发
+basalt.onEvent("rednet_message", function(senderID, msg, protocol)
+    if protocol ~= PROTOCOL or type(msg) ~= "table" then return end
+    if msg.type == "act_joinRoom" then
+        handleJoinRoom(senderID, msg)
+    elseif msg.type == "req_roomList" then
+        handleRoomListRequest(senderID)
+    else
+        local room = playerRoom[senderID] and rooms[playerRoom[senderID]]
+        if not room then return end
+        handleRoomMessage(room, senderID, msg)
+    end
+end)
+
+-- 心跳检测（后台协程）
+basalt.schedule(function()
     while true do
         os.sleep(5)
         rednet.broadcast({ type = "ev_heartbeat" }, PROTOCOL)
@@ -671,16 +639,16 @@ local function heartbeat_loop()
             end
             if changed then
                 local onlineCount = 0
-                for _, pl in pairs(rs.players) do
-                    if pl.connected then onlineCount = onlineCount + 1 end
+                for _, p in pairs(rs.players) do
+                    if p.connected then onlineCount = onlineCount + 1 end
                 end
                 roomBroadcast(room, { type = "sync_statusUpdate", current = onlineCount, total = #rs.playerOrder })
                 broadcastScores(room)
-                renderStatusBar()
+                updateStatusBar()
             end
         end
     end
-end
+end)
 
 local modem = peripheral.find("modem")
 if not modem then error("No Wireless Modem found") end
@@ -689,9 +657,6 @@ rednet.host(PROTOCOL, "NIMMT_SERVER")
 log(nil, "Log", "Server registered as 'NIMMT_SERVER'")
 log(nil, "Log", "Server started on ID: " .. os.getComputerID())
 
--- 初始化窗口系统（接管终端界面）
-fullRedraw()
-
 log(nil, "Lobby", "Server ready. Use client to Create or Join a room.")
 
-parallel.waitForAny(net_loop, heartbeat_loop)
+basalt.run()

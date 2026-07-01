@@ -28,9 +28,9 @@ local joinServerID        = nil -- Join 流程中缓存的服务器 ID（用于 
 ----------------------------------------------
 -- 客户端状态
 ----------------------------------------------
-local gameState = {
+local gameState           = {
     gamePhase       = "MENU",
-    roomID          = nil,  -- 当前所在房间号（由 sync_lobbyUpdate 设置）
+    roomID          = nil, -- 当前所在房间号（由 sync_lobbyUpdate 设置）
     isHost          = false,
     lobbyCount      = 0,
     myID            = os.getComputerID(),
@@ -83,7 +83,7 @@ local menuFrame = basalt.createFrame()
 menuFrame:addImage({
     bimg = utils.loadBimgImage(BIMG_PATH)
 })
-    :setPosition("{parent.width / 2 - 4}", 5)
+    :setPosition("{parent.width / 2 - 4}", 5):setZ(1)
     :setForeground(colors.yellow)
 
 -- 状态提示行（连接中/错误信息）
@@ -98,7 +98,7 @@ local joinModal
 
 menuFrame:addButton()
     :setPosition("{parent.width / 2 - 14}", 13):setSize(13, 3)
-    :setBackground(colors.green):setForeground(colors.black)
+    :setBackground(colors.green):setForeground(colors.black):setBackgroundState("clicked", colors.lime)
     :setText("Create Game")
     :onClick(function()
         if pendingServerID then return end
@@ -130,7 +130,7 @@ menuFrame:addButton()
 
 menuFrame:addButton()
     :setPosition("{parent.width / 2 + 1}", 13):setSize(12, 3)
-    :setBackground(colors.blue):setForeground(colors.white)
+    :setBackground(colors.blue):setForeground(colors.white):setBackgroundState("clicked", colors.lightBlue)
     :setText("Join Game")
     :onClick(function()
         basalt.schedule(function()
@@ -163,8 +163,8 @@ joinModal:addLabel()
     :setText("Available Rooms:")
 
 local roomList = joinModal:addList({
-        selectable      = true,
-        multiSelection  = false,
+        selectable     = true,
+        multiSelection = false,
     })
     :setPosition(3, 3):setSize(21, 7)
     :setBackground(colors.black):setForeground(colors.white)
@@ -172,7 +172,7 @@ local roomList = joinModal:addList({
 
 joinModal:addButton()
     :setPosition(3, 11):setSize(7, 1)
-    :setBackground(colors.orange):setForeground(colors.white)
+    :setBackground(colors.orange):setForeground(colors.white):setBackgroundState("clicked", colors.yellow)
     :setText("Refresh")
     :onClick(function()
         if not joinServerID then
@@ -193,7 +193,7 @@ joinModal:addButton()
 
 joinModal:addButton()
     :setPosition(12, 11):setSize(7, 1)
-    :setBackground(colors.lime):setForeground(colors.black)
+    :setBackground(colors.green):setForeground(colors.black):setBackgroundState("clicked", colors.lime)
     :setText("Connect")
     :onClick(function()
         if pendingServerID then return end
@@ -210,7 +210,7 @@ joinModal:addButton()
 
 joinModal:addButton()
     :setPosition(3, 13):setSize(8, 1)
-    :setBackground(colors.red):setForeground(colors.white)
+    :setBackground(colors.red):setForeground(colors.white):setBackgroundState("clicked", colors.orange)
     :setText("Cancel")
     :onClick(function() joinModal.visible = false end)
 
@@ -246,7 +246,8 @@ local lblWaiting = roomFrame:addLabel()
 
 local btnRoomStart = roomFrame:addButton()
     :setPosition("{parent.width / 2 - 7}", 13):setSize(15, 3)
-    :setBackground(colors.green):setForeground(colors.black):setText("START GAME")
+    :setBackground(colors.green):setForeground(colors.black):setBackgroundState("clicked", colors.lime)
+    :setText("START GAME")
     :onClick(function()
         rednet.send(SERVER_ID, { type = "act_startGame" }, PROTOCOL)
     end)
