@@ -54,7 +54,7 @@ local function NIMMT_DEBUG(msg)
     if not config.debug then return end
     local f = fs.open(shell.resolve("./nimmt_debug.txt"), "a")
     if f then
-        f.writeLine(os.clock() .. " " .. tostring(msg))
+        f.writeLine("[" .. os.clock() .. "] " .. tostring(msg))
         f.close()
     end
 end
@@ -697,9 +697,13 @@ handlers["ev_serverClosing"] = function(msg)
     onServerDisconnected(msg.msg or "Room discarded")
 end
 
--- 心跳：更新最后收到消息的时间戳
+-- 心跳：更新最后收到消息的时间戳，并回复 ACK
 handlers["ev_heartbeat"] = function(msg)
     timerLastServerMsg = os.clock()
+    -- 双向心跳：回复 ACK 让服务端知道客户端存活
+    if SERVER_ID then
+        rednet.send(SERVER_ID, { type = "act_heartbeat" }, PROTOCOL)
+    end
 end
 
 -------------------------------------------------------------------------

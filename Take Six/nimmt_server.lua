@@ -16,7 +16,7 @@ local function newRoomState(roomID, hostID)
     return {
         roomID         = roomID,
         hostID         = hostID,
-        phase          = "LOBBY",  -- LOBBY / SELECTION / SHOWDOWN / WAITING_CHOICE / ROUND_OVER
+        phase          = "LOBBY", -- LOBBY / SELECTION / SHOWDOWN / WAITING_CHOICE / ROUND_OVER
         rows           = { {}, {}, {}, {} },
         players        = {},
         playerOrder    = {},
@@ -97,27 +97,15 @@ local function updateStatusBar()
         totalPlayers = totalPlayers + #room.state.players
     end
     statusLabel:setText(" Server: NIMMT | Rooms: " ..
-    active .. "/3 | Players: " .. totalPlayers .. "  |  [1/2/3]Tab [0]Main")
-end
-
--- 日志行间前进（超出行高则滚动）
-local function nextLine(win)
-    local _, h = win.getSize()
-    local _, y = win.getCursorPos()
-    if y >= h then
-        win.scroll(1)
-        win.setCursorPos(1, y)
-    else
-        win.setCursorPos(1, y + 1)
-    end
+        active .. "/3 | Players: " .. totalPlayers .. "  |  [1/2/3]Tab [0]Main")
 end
 
 local tagColors = { Lobby = colors.lightBlue, Log = colors.yellow, Act = colors.orange, Error = colors.red }
 
 -- 日志输出：写入对应 Tab 的 Display Window（实时彩色输出 + 自动滚动）
 -- roomID = nil 表示系统消息（Main 标签）, 1/2/3 表示对应房间
--- 每条日志拆为两行（时间戳行 + 消息行），还原原始 printColored 的换行格式
-local function log(roomID, tag, msg)
+-- 组合 utils.printColored（写彩色文本）+ utils.nextLine（推进行）
+local function NIMMT_LOG(roomID, tag, msg)
     local timestamp = utils.getTimestamp()
     local key = roomID and tostring(roomID) or "main"
     local td = tabDisplays[key]
@@ -126,25 +114,20 @@ local function log(roomID, tag, msg)
     local tagColor = tagColors[tag] or colors.gray
 
     -- Line 1: [TAG]-HH:MM:SS-
-    win.setTextColor(tagColor)
-    win.write("[" .. tag .. "]")
-    win.setTextColor(colors.gray)
-    win.write(timestamp)
-    nextLine(win)
+    utils.printColored(win, "fast", true, {
+        { "[" .. tag .. "]", tagColor },
+        { timestamp,         colors.gray },
+    })
+    utils.nextLine(win)
 
     -- Line 2: 消息正文（数字蓝色，其余白色）
-    local first = true
+    local msgSegments = {}
     for part in msg:gmatch("%S+") do
         local color = tonumber(part) and colors.blue or colors.white
-        win.setTextColor(color)
-        if first then
-            win.write(part)
-            first = false
-        else
-            win.write(" " .. part)
-        end
+        table.insert(msgSegments, { part, color })
     end
-    nextLine(win)
+    utils.printColored(win, "fast", true, msgSegments)
+    utils.nextLine(win)
 end
 
 local function localID(pid, rs)
@@ -173,10 +156,11 @@ local function addPlayerToRoom(room, playerID)
         connected = true,
         afk = false,
         lastSeen = os.clock(),
+        heartbeatLastSeen = os.clock(),
     }
     playerRoom[playerID] = rs.roomID
     roomBroadcast(room, { type = "sync_lobbyUpdate", playerList = rs.playerOrder })
-    log(rs.roomID, "Lobby", "Player " .. idx .. " joined (PC id = " .. playerID .. ").")
+    NIMMT_LOG(rs.roomID, "Lobby", "Player " .. idx .. " joined (PC id = " .. playerID .. ").")
 end
 
 -- 创建新房间，hostID 为创建者
@@ -184,7 +168,7 @@ local function createRoom(hostID)
     local roomID = nextRoomID
     nextRoomID = nextRoomID + 1
     rooms[roomID] = { state = newRoomState(roomID, hostID) }
-    log(nil, "Lobby", "Room #" .. roomID .. " created. (Host: PC " .. hostID .. ")")
+    NIMMT_LOG(nil, "Lobby", "Room #" .. roomID .. " created. (Host: PC " .. hostID .. ")")
     return roomID
 end
 
@@ -201,7 +185,7 @@ local function destroyRoom(roomID)
         playerRoom[pid] = nil
     end
     rooms[roomID] = nil
-    log(nil, "Log", "Room #" .. roomID .. " destroyed.")
+    NIMMT_LOG(nil, "Log", "Room #" .. roomID .. " destroyed.")
 end
 
 -- 从房间移除玩家（移交房主 → 空房自动销毁）
@@ -268,7 +252,7 @@ end
 
 local function startNewRound(room)
     local rs = room.state
-    log(rs.roomID, "Log", "Starting New Round...")
+    NIMMT_LOG(rs.roomID, "Log", "Starting New Round...")
     local deck = generateDeck()
 
     rs.rows = { { table.remove(deck) }, { table.remove(deck) }, { table.remove(deck) }, { table.remove(deck) } }
@@ -277,7 +261,7 @@ local function startNewRound(room)
         if p.afk then
             p.connected = false
             rednet.send(pid, { type = "msg_afk" }, PROTOCOL)
-            log(rs.roomID, "Act", "Player " .. localID(pid, rs) .. " removed for AFK")
+            NIMMT_LOG(rs.roomID, "Act", "Player " .. localID(pid, rs) .. " removed for AFK")
         end
     end
 
@@ -305,7 +289,7 @@ local function resolveTurn(room)
         os.sleep(1)
         local anyPlayerID = next(rs.players)
         if anyPlayerID and #rs.players[anyPlayerID].hand == 0 then
-            log(rs.roomID, "Log", "Round Over. Checking scores...")
+            NIMMT_LOG(rs.roomID, "Log", "Round Over. Checking scores...")
             rs.phase = "ROUND_OVER"
             roomBroadcast(room, { type = "ev_roundOver" })
             local isGameOver = false
@@ -318,7 +302,7 @@ local function resolveTurn(room)
 
             if isGameOver then
                 roomBroadcast(room, { type = "ev_gameOver" })
-                log(rs.roomID, "Log", "Game Over triggered.")
+                NIMMT_LOG(rs.roomID, "Log", "Game Over triggered.")
             else
                 startNewRound(room)
             end
@@ -354,7 +338,7 @@ local function resolveTurn(room)
         rs.phase = "WAITING_CHOICE"
         rs.blockingPlayer = pid
         rs.blockingCard = card
-        log(rs.roomID, "Act", "Waiting for Player " .. localID(pid, rs) .. " to choose row...")
+        NIMMT_LOG(rs.roomID, "Act", "Waiting for Player " .. localID(pid, rs) .. " to choose row...")
         rednet.send(pid, {
             type = "req_rowChoice",
             card = card,
@@ -369,7 +353,7 @@ local function resolveTurn(room)
             local penalty = core.getRowBullHeads(targetRow)
             rs.players[pid].score = rs.players[pid].score - penalty
             broadcastScores(room)
-            log(rs.roomID, "Log",
+            NIMMT_LOG(rs.roomID, "Log",
                 "Player " .. localID(pid, rs) .. " exploded row " .. bestRowIndex .. " (-" .. penalty .. ")")
             rs.rows[bestRowIndex] = { card }
             roomBroadcast(room, { type = "msg_toast", msg = "P" .. localID(pid, rs) .. " ate " .. penalty .. " heads!" })
@@ -419,7 +403,7 @@ local function handleTurnTimeout(room)
                 local card = p.hand[1]
                 rs.turnSelections[pid] = card
                 p.afk = true
-                log(rs.roomID, "Act", "Player " .. localID(pid, rs) .. " AFK, auto-play " .. card)
+                NIMMT_LOG(rs.roomID, "Act", "Player " .. localID(pid, rs) .. " AFK, auto-play " .. card)
                 rednet.send(pid, { type = "msg_afk" }, PROTOCOL)
             end
         end
@@ -438,7 +422,7 @@ local function handleTurnTimeout(room)
         local pid = rs.blockingPlayer
         if pid and rs.players[pid] then
             rs.players[pid].afk = true
-            log(rs.roomID, "Act", "Player " .. localID(pid, rs) .. " AFK, auto-choose Row 1")
+            NIMMT_LOG(rs.roomID, "Act", "Player " .. localID(pid, rs) .. " AFK, auto-choose Row 1")
             rednet.send(pid, { type = "msg_afk" }, PROTOCOL)
             local penalty = core.getRowBullHeads(rs.rows[1])
             rs.players[pid].score = rs.players[pid].score - penalty
@@ -466,20 +450,20 @@ local function handleRoomMessage(room, pid, msg)
             rednet.send(pid, { type = "msg_error", msg = "Only Host can start" }, PROTOCOL)
             return
         end
-        log(rs.roomID, "Act", "Host started the game!")
+        NIMMT_LOG(rs.roomID, "Act", "Host started the game!")
         startNewRound(room)
     elseif msg.type == "act_playCard" and rs.phase == "SELECTION" then
         local card = msg.card
         if type(card) ~= "number" then return end
         if not hasCard(rs.players[pid].hand, card) then
-            log(rs.roomID, "Error", "Player " .. localID(pid, rs) .. " tried to cheat with card " .. card)
+            NIMMT_LOG(rs.roomID, "Error", "Player " .. localID(pid, rs) .. " tried to cheat with card " .. card)
             return
         end
         if rs.turnSelections[pid] ~= nil then
-            log(rs.roomID, "Log", "Player " .. localID(pid, rs) .. " changed selection to " .. card)
+            NIMMT_LOG(rs.roomID, "Log", "Player " .. localID(pid, rs) .. " changed selection to " .. card)
             rednet.send(pid, { type = "msg_toast", msg = "Selection updated to " .. card }, PROTOCOL)
         else
-            log(rs.roomID, "Log", "Player " .. localID(pid, rs) .. " selected " .. card)
+            NIMMT_LOG(rs.roomID, "Log", "Player " .. localID(pid, rs) .. " selected " .. card)
         end
         rs.turnSelections[pid] = card
         local readyCount = 0
@@ -495,7 +479,7 @@ local function handleRoomMessage(room, pid, msg)
         end
         local rowIdx = msg.rowIndex
         if type(rowIdx) ~= "number" or rowIdx < 1 or rowIdx > 4 then return end
-        log(rs.roomID, "Log", "Player " .. localID(pid, rs) .. " chose Row " .. rowIdx)
+        NIMMT_LOG(rs.roomID, "Log", "Player " .. localID(pid, rs) .. " chose Row " .. rowIdx)
         local penalty = core.getRowBullHeads(rs.rows[rowIdx])
         rs.players[pid].score = rs.players[pid].score - penalty
         broadcastScores(room)
@@ -510,8 +494,14 @@ local function handleRoomMessage(room, pid, msg)
         if rs.players[pid] then
             rs.players[pid].afk = false
             rs.players[pid].connected = true
-            log(rs.roomID, "Log", "Player " .. localID(pid, rs) .. " resumed from AFK")
+            rs.players[pid].heartbeatLastSeen = os.clock()
+            NIMMT_LOG(rs.roomID, "Log", "Player " .. localID(pid, rs) .. " resumed from AFK")
             rednet.send(pid, { type = "msg_toast", msg = "Welcome back!" }, PROTOCOL)
+        end
+    elseif msg.type == "act_heartbeat" then
+        -- 客户端心跳回复：追踪客户端存活状态
+        if rs.players[pid] then
+            rs.players[pid].heartbeatLastSeen = os.clock()
         end
     elseif msg.type == "act_leaveRoom" then
         removePlayerFromRoom(pid)
@@ -574,7 +564,7 @@ end
 do
     local originalStop = basalt.stop
     function basalt.stop()
-        log(nil, "Error", "Server shutting down, notifying clients...")
+        NIMMT_LOG(nil, "Error", "Server shutting down, notifying clients...")
         rednet.broadcast({ type = "ev_serverClosing", msg = "Server shutdown!" }, PROTOCOL)
         for _, room in pairs(rooms) do
             if room.state.turnTimer then os.cancelTimer(room.state.turnTimer) end
@@ -628,23 +618,29 @@ basalt.schedule(function()
         local now = os.clock()
         for roomID, room in pairs(rooms) do
             local rs = room.state
-            local changed = false
-            for pid, p in pairs(rs.players) do
-                if p.connected and now - p.lastSeen > 60 then
-                    p.connected = false
-                    log(roomID, "Log", "Player " .. localID(pid, rs) .. " timed out (PC " .. pid .. ")")
-                    roomBroadcast(room, { type = "msg_toast", msg = "P" .. localID(pid, rs) .. " disconnected" })
-                    changed = true
+            if rs.phase ~= "LOBBY" then
+                local changed = false
+                for pid, p in pairs(rs.players) do
+                    local lastActive = math.max(p.lastSeen or 0, p.heartbeatLastSeen or 0)
+                    if p.connected and now - lastActive > 60 then
+                        p.connected = false
+                        NIMMT_LOG(roomID, "Log",
+                            "Player " .. localID(pid, rs) .. " timed out (PC " .. pid .. ")")
+                        roomBroadcast(room,
+                            { type = "msg_toast", msg = "P" .. localID(pid, rs) .. " disconnected" })
+                        changed = true
+                    end
                 end
-            end
-            if changed then
-                local onlineCount = 0
-                for _, p in pairs(rs.players) do
-                    if p.connected then onlineCount = onlineCount + 1 end
+                if changed then
+                    local onlineCount = 0
+                    for _, p in pairs(rs.players) do
+                        if p.connected then onlineCount = onlineCount + 1 end
+                    end
+                    roomBroadcast(room,
+                        { type = "sync_statusUpdate", current = onlineCount, total = #rs.playerOrder })
+                    broadcastScores(room)
+                    updateStatusBar()
                 end
-                roomBroadcast(room, { type = "sync_statusUpdate", current = onlineCount, total = #rs.playerOrder })
-                broadcastScores(room)
-                updateStatusBar()
             end
         end
     end
@@ -654,9 +650,9 @@ local modem = peripheral.find("modem")
 if not modem then error("No Wireless Modem found") end
 rednet.open(peripheral.getName(modem))
 rednet.host(PROTOCOL, "NIMMT_SERVER")
-log(nil, "Log", "Server registered as 'NIMMT_SERVER'")
-log(nil, "Log", "Server started on ID: " .. os.getComputerID())
+NIMMT_LOG(nil, "Log", "Server registered as 'NIMMT_SERVER'")
+NIMMT_LOG(nil, "Log", "Server started on ID: " .. os.getComputerID())
 
-log(nil, "Lobby", "Server ready. Use client to Create or Join a room.")
+NIMMT_LOG(nil, "Lobby", "Server ready. Use client to Create or Join a room.")
 
 basalt.run()

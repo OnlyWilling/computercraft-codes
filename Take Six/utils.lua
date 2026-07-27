@@ -56,28 +56,53 @@ local function loadBimgImage(path)
 end
 
 --- 在单行内打印包含多种颜色的文本。
+--- @param target table|nil 输出目标：nil → term（终端），或一个拥有 write()/setTextColor()/getTextColor() 的窗口对象
+--- @param mode string 决定打印动画的速度（仅 target=nil 时有效）
 --- @param segments table 包含 {text, color} 片段的列表。
---- @param mode string 决定打印动画的速度
-local function printColored(segments, mode)
-    mode = mode or "slow" -- default slow write
-    local oldColor = term.getTextColor()
+local function printColored(target, mode, autoSpace, segments)
+    local t = target or term
+    mode = mode or "slow"
+    autoSpace = autoSpace or true
+    local oldColor = t.getTextColor()
 
     for _, part in ipairs(segments) do
-        -- 设置颜色并打印
-        term.setTextColor(part[2])
-        if mode == "slow" then
-            textutils.slowWrite(part[1], 30)
+        t.setTextColor(part[2])
+        if autoSpace then
+            if mode == "slow" and not target then
+                textutils.slowWrite(part[1], 30)
+            else
+                t.write(part[1])
+            end
+            autoSpace = false
         else
-            term.write(part[1])
-        end
-
-        if part[1]:match("^%-%d%d:%d%d:%d%d%-$") then
-            print()
+            if mode == "slow" and not target then
+                textutils.slowWrite(" " .. part[1], 30)
+            else
+                t.write(" " .. part[1])
+            end
         end
     end
 
-    print()
-    term.setTextColor(oldColor)
+    -- 写 term 时保留旧行为的 final print() 换行
+    -- 写 window 时不加换行，由调用者的 nextLine 控制
+    if not target then
+        print()
+    end
+
+    t.setTextColor(oldColor)
+end
+
+--- 将窗口光标推进一行（超出高度时自动上滚）
+--- @param win table 窗口对象，需支持 getSize() / getCursorPos() / scroll() / setCursorPos()
+local function nextLine(win)
+    local _, h = win.getSize()
+    local _, y = win.getCursorPos()
+    if y >= h then
+        win.scroll(1)
+        win.setCursorPos(1, y)
+    else
+        win.setCursorPos(1, y + 1)
+    end
 end
 
 --- 返回当前时间戳
@@ -92,5 +117,6 @@ return {
     loadConfig = loadConfig,
     loadBimgImage = loadBimgImage,
     printColored = printColored,
+    nextLine = nextLine,
     getTimestamp = getTimestamp,
 }
