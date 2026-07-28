@@ -150,11 +150,11 @@ menuFrame:addButton()
 -- 可用房间列表缓存（供 Connect 按钮读取选中房间的 ID）
 local availableRooms = {}
 
--- Join Game 模态框（房间列表，默认隐藏，z=4 浮在按钮上）
+-- Join Game 模态框（房间列表，默认隐藏，z=6 浮在按钮上）
 joinModal = menuFrame:addFrame()
     :setPosition("{math.floor(parent.width / 2) - 12}", "{math.floor(parent.height / 2) - 7}")
     :setSize(26, 15)
-    :setBackground(colors.gray):setZ(4)
+    :setBackground(colors.gray):setZ(6)
 joinModal.visible = false
 
 joinModal:addLabel()
