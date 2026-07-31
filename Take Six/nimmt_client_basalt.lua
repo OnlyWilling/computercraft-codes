@@ -596,6 +596,8 @@ handlers["ev_gameStart"] = function(msg)
 end
 
 handlers["sync_dealHand"] = function(msg)
+    -- 广播模式：只接收发给自己的手牌
+    if msg.targetID and msg.targetID ~= gameState.myID then return end
     gameState.hand = msg.hand
     table.sort(gameState.hand)
     updateHandUI()
@@ -760,8 +762,8 @@ basalt.schedule(function()
             timerPendingConnect = nil
             menuStatusLbl:setForeground(colors.red):setText("Connection timed out!")
         end
-        -- 已建立连接的心跳超时（10s 无任何消息）
-        if SERVER_ID and (os.clock() - timerLastServerMsg) > 10 then
+        -- 已建立连接的心跳超时（20s 无任何消息，覆盖结算阶段的阻塞时间）
+        if SERVER_ID and (os.clock() - timerLastServerMsg) > 20 then
             onServerDisconnected("Connection lost")
         end
     end

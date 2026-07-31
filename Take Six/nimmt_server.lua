@@ -16,7 +16,7 @@ local function newRoomState(roomID, hostID)
     return {
         roomID         = roomID,
         hostID         = hostID,
-        phase          = "LOBBY", -- LOBBY / SELECTION / SHOWDOWN / WAITING_CHOICE / ROUND_OVER
+        phase          = "LOBBY", -- LOBBY / SELECTION / SHOWDOWN / WAITING_CHOICE / RESOLVING / ROUND_OVER
         rows           = { {}, {}, {}, {} },
         players        = {},
         playerOrder    = {},
@@ -269,7 +269,7 @@ local function startNewRound(room)
         if p.connected then
             p.hand = {}
             for i = 1, 10 do table.insert(p.hand, table.remove(deck)) end
-            rednet.send(pid, { type = "sync_dealHand", hand = p.hand }, PROTOCOL)
+            roomBroadcast(room, { type = "sync_dealHand", hand = p.hand, targetID = pid })
         end
     end
 
@@ -282,11 +282,12 @@ end
 
 ----------------------------------------------
 -- 核心逻辑：放置牌的算法 (牛头王精髓)
+-- 事件驱动版：每张牌结算通过 timer 触发下一张，不阻塞事件循环
 ----------------------------------------------
-local function resolveTurn(room)
+local function resolveNextCard(room)
     local rs = room.state
     if #rs.turnCards == 0 then
-        os.sleep(1)
+        -- 所有牌已结算，判定回合结束或新回合
         local anyPlayerID = next(rs.players)
         if anyPlayerID and #rs.players[anyPlayerID].hand == 0 then
             NIMMT_LOG(rs.roomID, "Log", "Round Over. Checking scores...")
@@ -296,16 +297,11 @@ local function resolveTurn(room)
             for pid, p in pairs(rs.players) do
                 if p.score >= MAX_BULLHEADS then isGameOver = true end
             end
-
             broadcastScores(room)
-            os.sleep(3)
-
-            if isGameOver then
-                roomBroadcast(room, { type = "ev_gameOver" })
-                NIMMT_LOG(rs.roomID, "Log", "Game Over triggered.")
-            else
-                startNewRound(room)
-            end
+            -- 用 timer 替代 os.sleep(1)，让心跳能继续发送
+            rs._pendingGameOver = isGameOver
+            rs.turnTimer = os.startTimer(1)
+            return
         else
             rs.phase = "SELECTION"
             roomBroadcast(room, { type = "ev_newTurn" })
@@ -314,6 +310,7 @@ local function resolveTurn(room)
         return
     end
 
+    -- 处理 turnCards 中的第一张牌
     local currentPlay = rs.turnCards[1]
     local card = currentPlay.card
     local pid = currentPlay.id
@@ -324,7 +321,6 @@ local function resolveTurn(room)
     for i = 1, 4 do
         local row = rs.rows[i]
         local lastCard = row[#row]
-
         if card > lastCard then
             local diff = card - lastCard
             if diff < minDiff then
@@ -335,6 +331,7 @@ local function resolveTurn(room)
     end
 
     if bestRowIndex == -1 then
+        -- 所有行的尾牌都比当前牌大，需要玩家选行
         rs.phase = "WAITING_CHOICE"
         rs.blockingPlayer = pid
         rs.blockingCard = card
@@ -364,9 +361,15 @@ local function resolveTurn(room)
 
     table.remove(rs.turnCards, 1)
     roomBroadcast(room, { type = "sync_updateBoard", rows = rs.rows })
-    sleep(1)
 
-    resolveTurn(room)
+    if #rs.turnCards > 0 then
+        -- 还有牌待结算：用 timer 触发下一张，不阻塞
+        rs.phase = "RESOLVING"
+        rs.turnTimer = os.startTimer(1)
+    else
+        -- 所有牌都已放置完毕，继续判定回合是否结束
+        resolveNextCard(room)
+    end
 end
 
 local function startShowdown(room)
@@ -389,8 +392,9 @@ local function startShowdown(room)
     rs.turnSelections = {}
     table.sort(rs.turnCards, function(a, b) return a.card < b.card end)
     roomBroadcast(room, { type = "sync_turnSummary", turnCards = rs.turnCards })
-    os.sleep(1.5)
-    resolveTurn(room)
+    -- 用 timer 替代 os.sleep(1.5); resolveTurn，不阻塞事件循环
+    rs.phase = "RESOLVING"
+    rs.turnTimer = os.startTimer(1)
 end
 
 local function handleTurnTimeout(room)
@@ -433,7 +437,7 @@ local function handleTurnTimeout(room)
             rs.blockingPlayer = nil; rs.blockingCard = nil
             table.remove(rs.turnCards, 1)
             roomBroadcast(room, { type = "sync_updateBoard", rows = rs.rows })
-            resolveTurn(room)
+            resolveNextCard(room)
         end
     end
 end
@@ -489,7 +493,7 @@ local function handleRoomMessage(room, pid, msg)
         rs.blockingPlayer = nil; rs.blockingCard = nil
         table.remove(rs.turnCards, 1)
         roomBroadcast(room, { type = "sync_updateBoard", rows = rs.rows })
-        resolveTurn(room)
+        resolveNextCard(room)
     elseif msg.type == "act_afkResume" then
         if rs.players[pid] then
             rs.players[pid].afk = false
@@ -586,11 +590,29 @@ basalt.onEvent("key", function(key)
     end
 end)
 
--- 回合倒计时
+-- 回合倒计时 + 结算推进
 basalt.onEvent("timer", function(timerID)
     for _, room in pairs(rooms) do
-        if room.state.turnTimer == timerID then
-            handleTurnTimeout(room)
+        local rs = room.state
+        if rs.turnTimer == timerID then
+            rs.turnTimer = nil
+
+            if rs.phase == "RESOLVING" then
+                -- 推进下一张牌结算
+                resolveNextCard(room)
+            elseif rs.phase == "ROUND_OVER" and rs._pendingGameOver ~= nil then
+                -- 轮末暂停结束，判定游戏是否终结
+                local isGameOver = rs._pendingGameOver
+                rs._pendingGameOver = nil
+                if isGameOver then
+                    roomBroadcast(room, { type = "ev_gameOver" })
+                    NIMMT_LOG(rs.roomID, "Log", "Game Over triggered.")
+                else
+                    startNewRound(room)
+                end
+            else
+                handleTurnTimeout(room)
+            end
             break
         end
     end
