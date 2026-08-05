@@ -4,3 +4,6 @@
 [submodule "Boredbutton"]
 	path = Boredbutton
 	url = https://github.com/michielp1807/CC-Bored-Button.git
+[submodule "aegis-autocraft"]
+	path = aegis-autocraft
+	url = git@github.com:egor-oleg/aegis-autocraft.git
