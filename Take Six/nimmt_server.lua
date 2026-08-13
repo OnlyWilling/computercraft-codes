@@ -1,8 +1,8 @@
 ----------------------------------------------
 -- 配置与状态
 ----------------------------------------------
-local core          = require("nimmt_core")
-local utils         = require("utils")
+local core          = require("./lib/nimmt_core")
+local utils         = require("./lib/utils")
 local basalt        = require("basalt")
 local PROTOCOL      = "NIMMT"
 local MAX_PLAYERS   = 7  -- 牛头王支持 2-10 人，这里设7

@@ -1,0 +1,19 @@
+--- 默认物品分组（首次启动时写入文件）。
+local DEFAULT_ITEM_GROUPS = {
+    ["minecraft:oak_planks"] = "planks", ["minecraft:spruce_planks"] = "planks",
+    ["minecraft:birch_planks"] = "planks", ["minecraft:jungle_planks"] = "planks",
+    ["minecraft:acacia_planks"] = "planks", ["minecraft:dark_oak_planks"] = "planks",
+    ["minecraft:mangrove_planks"] = "planks", ["minecraft:cherry_planks"] = "planks",
+    ["minecraft:bamboo_planks"] = "planks",
+
+    ["minecraft:oak_slab"] = "slabs", ["minecraft:spruce_slab"] = "slabs",
+    ["minecraft:birch_slab"] = "slabs", ["minecraft:jungle_slab"] = "slabs",
+    ["minecraft:acacia_slab"] = "slabs", ["minecraft:dark_oak_slab"] = "slabs",
+    ["minecraft:mangrove_slab"] = "slabs", ["minecraft:cherry_slab"] = "slabs",
+    ["minecraft:bamboo_slab"] = "slabs",
+
+    ["minecraft:oak_log"] = "logs", ["minecraft:spruce_log"] = "logs",
+    ["minecraft:birch_log"] = "logs", ["minecraft:jungle_log"] = "logs",
+    ["minecraft:acacia_log"] = "logs", ["minecraft:dark_oak_log"] = "logs",
+    ["minecraft:mangrove_log"] = "logs", ["minecraft:cherry_log"] = "logs",
+}

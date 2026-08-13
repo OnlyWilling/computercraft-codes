@@ -214,8 +214,8 @@ end
 
 return {
     -- Lua Config
-    saveConfigFile = saveConfigFile,
-    loadConfigFile = loadConfigFile,
+    saveConfig = saveConfigFile,
+    loadConfig = loadConfigFile,
 
     -- Bimg loader
     loadBimgImage = loadBimgImage,

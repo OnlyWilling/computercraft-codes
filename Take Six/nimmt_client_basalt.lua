@@ -2,21 +2,25 @@ local modem = peripheral.find("modem")
 if not modem then error("No Wireless Modem found") end
 rednet.open(peripheral.getName(modem))
 
-local utils               = require("utils")
-local core                = require("nimmt_core")
-local basalt              = require("basalt")
+local utils          = require("lib/utils")
+local core           = require("lib/nimmt_core")
+local basalt         = require("basalt")
 
-local PROTOCOL            = "NIMMT"
-local CONFIG_FILE         = "./nimmt.cfg"
-local BIMG_PATH           = "./bimg/nimmt_logo.bimg"
-local SERVER_ID           = nil
-local PLAYER_COLORS       = { colors.red, colors.orange, colors.yellow, colors.green, colors.cyan, colors.blue, colors
+local PROTOCOL       = "NIMMT"
+local CONFIG_FILE    = "./nimmt.cfg"
+local BIMG_PATH      = "./bimg/nimmt_logo.bimg"
+local SERVER_ID      = nil
+local PLAYER_COLORS  = { colors.red, colors.orange, colors.yellow, colors.green, colors.cyan, colors.blue, colors
     .purple }
 
-local default_config      = { lastServerID = nil, debug = false }
+local default_config = { lastServerID = nil, debug = false }
 
-local playerColorMap      = {} -- PC ID → {localID, color} 映射表
-local config              = utils.loadConfig(default_config, CONFIG_FILE)
+local playerColorMap = {} -- PC ID → {localID, color} 映射表
+local config         = utils.loadConfigFile(CONFIG_FILE)
+if config == nil then
+    config = default_config
+    utils.saveConfigFile(default_config, CONFIG_FILE)
+end
 
 local timerLastServerMsg  = 0 -- os.clock() 时间戳，连接时初始化，用于心跳超时检测
 
