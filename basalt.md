@@ -1,241 +1,67 @@
 ---
 name: basalt
-description: Basalt GUI 库（CraftOS- PC/CC:Tweaked）开发指南与最佳实践
+description: 使用仓库最新版 Basalt 为 CraftOS/CC:Tweaked 设计、实现和审查 Lua UI；API 细节查知识库，经验遵循事件驱动和小屏适配原则
 ---
 
-# Basalt GUI 开发指南
+# Basalt UI 开发 Skill
 
-## 一、Basalt 架构核心
+## 适用范围
 
-### 1.1 元素系统（Element System）
+处理 Minecraft ComputerCraft / CC:Tweaked 中基于 Basalt 的 Lua UI：页面、Frame、Label、Button、Input、事件、Timer、窗口和后续 widget。
 
-所有 UI 元素继承自 `VisualElement` → `Container` → `BaseElement`。每个元素类通过 metatable 实现继承：
+## 开始工作前
 
-```lua
-local VisualElement = aa.getElement("VisualElement")
-local Button = setmetatable({}, VisualElement)  -- Button 继承 VisualElement
-Button.__index = Button                         -- 实例的 __index 指向类表
-```
+1. 先阅读 [`docs/knowledge/basalt/README.md`](../../docs/knowledge/basalt/README.md)，确认当前版本和资料优先级。
+2. API 细节优先查 [`docs/knowledge/basalt/api/core.md`](../../docs/knowledge/basalt/api/core.md)；特定 widget 先查 `api/` 对应文件，再查 `wiki/` 原文。
+3. 以仓库最新版 [`Basalt/basalt.lua`](../../Basalt/basalt.lua) 为默认目标；只有用户明确要求时才按 `Basalt/basalt25.lua` 兼容。
+4. 阅读目标项目已有 UI，匹配其命名、缩进、页面切换和错误反馈风格。
 
-**实例方法查找链**：`instance → instance.__index(=class) → class's metatable(=parent class) → ...`
+## API 使用规则
 
-这意味着子类可以调用父类定义的所有方法。
+- 不凭记忆猜测 widget 参数、事件参数或版本能力；知识库没有记录时，先读对应 wiki Markdown 或源码。
+- 优先使用已确认的链式 API：`createFrame`、`addLabel`、`addButton`、`addInput`、`setPosition`、`setSize`、`setText`、`getText`、`setBackground`、`onClick`、`clear`、`close`。
+- 应用层只使用 widget 的公开 API；不要依赖 minified 文件内部局部变量或继承实现细节。
+- 新增 API 知识时标记 `verified`、`example` 或 `待验证`，并记录来源和版本。
 
-### 1.2 Property 系统
+## UI 设计规则
 
-`defineProperty` 为每个属性自动生成四个方法：
+- 页面按“状态 + 渲染函数”组织；页面切换时清理旧内容或明确复用控件。
+- 回调按“读取 → 规范化 → 校验 → 业务 → 持久化 → 反馈”顺序编写。
+- 输入一律当作字符串处理，显式转换并验证空值、范围和枚举。
+- 动态结果使用持久的反馈 Label；不要每次点击都重复创建控件。
+- 采用字符网格布局，使用 `getSize()` 做边界/居中计算，考虑小屏幕、长文本和空数据。
+- 控件事件只负责协调 UI 与业务模块；磁盘、网络和数据逻辑放在独立模块。
 
-```lua
-aa.defineProperty(aa, "background", {default=colors.black, type="color"})
--- 自动生成：
---   element:setBackground(value)         → 设置属性
---   element:getBackground()              → 读取属性
---   element:setBackgroundState(state, v) → 设置状态样式
---   element:getBackgroundState(state)    → 读取状态样式
-```
+## 事件与并发规则
 
-其中 **`setXxxState`** 是新版 Basalt（298KB minified build）才有的功能，旧版（225KB）不生成此方法。
+- Basalt 使用协作式事件循环；`run`/自动更新模式、`onEvent`、`schedule` 共享事件处理生命周期。
+- 事件回调保持短小，不在其中做无限循环、长时间计算或大批量同步 IO。
+- 延迟流程优先用 `os.startTimer` + `timer` 事件；保存并比较 Timer ID，页面销毁/取消时使旧 ID 失效。
+- 不把 `os.sleep` 当作后台线程；它会等待 CC 事件，具体对当前运行循环的影响按调用位置和目标构建实测。
+- 网络 API 的阻塞性以当前 CC:Tweaked 版本和项目封装为准，不从“可靠传输”推断全部调度行为。
 
-> ⚠️ 版本区别：新版 Basalt 的 `defineProperty` 包含 `setXxxState` / `getXxxState`，旧版只有 `setXxx` / `getXxx`。使用时根据文件大小确认 basalt.lua 是哪个版本。
+## 版本与验证
 
-### 1.3 Z 轴层级
+- 当前仓库存在最新版构建和 Basalt 2.5 备用实现；不要混用文档和代码假设。
+- 文件大小只能作为构建差异线索，不能作为版本号。
+- 如果 API 报 nil：先确认实际加载文件、版本、元素是否可用，再查该方法是否属于对应 widget。
+- 修改后至少做 Lua 语法检查或最小运行测试；无法启动 CC 环境时，明确说明哪些内容仅完成静态检查。
 
-```lua
-element:setZ(number)
-```
+## 后续 wiki Markdown 的融合规则
 
-- **数字越大 = 越靠顶层**（在父容器中后渲染）
-- 默认值：Button=5, Label=3, Frame/其他=1
+后续原始 Markdown 统一放入 [`docs/knowledge/basalt/wiki/`](../../docs/knowledge/basalt/wiki/)：
 
-### 1.4 事件系统
+1. 原文只读保存，按 widget/主题命名；不同版本用后缀区分。
+2. 从原文提炼到 `api/<widget>.md` 或 `api/<topic>.md`，记录创建方式、属性、事件、参数、返回值、版本、最小示例和来源。
+3. 跨 widget 的稳定经验才进入 `patterns.md`。
+4. 更新 `sources.md`；遇到 wiki、源码、项目示例冲突时保留冲突记录，不静默覆盖。
+5. 不为每个 widget 创建一个 skill。一个 `basalt` skill 作为入口即可，知识库承载可增长的 API 资料。
 
-```lua
-basalt.onEvent("rednet_message", function(senderID, msg, protocol) ... end)
-basalt.onEvent("key", function(key) ... end)
-basalt.onEvent("timer", function(timerID) ... end)
-basalt.onEvent("char", function(char) ... end)
+## 输出要求
 
--- 在后台协程中执行循环任务
-basalt.schedule(function()
-    while true do
-        os.sleep(5)
-        -- 定时任务
-    end
-end)
-```
+回答或修改 Basalt 代码时：
 
----
-
-## 二、⚠️ CC/Basalt 并发模型（最重要）
-
-**这是最容易被误解的部分，也是绝大多数 Bug 的根源。**
-
-### 2.1 `os.sleep()` 阻塞一切
-
-CC 的协程是**协作式**的，`os.sleep()` 内部调用 `os.pullEvent()`，**会阻塞整个计算机的事件循环**，包括：
-
-- 其他 `basalt.schedule` 协程（如心跳）
-- UI 渲染更新
-- `basalt.onEvent` 注册的回调处理
-
-```lua
--- ❌ 错误：这会阻塞所有其他协程
-basalt.schedule(function()
-    while true do
-        os.sleep(1)  -- 整个事件循环卡住 1 秒
-        -- 处理游戏逻辑
-    end
-end)
-
--- ✅ 正确：使用 os.startTimer + 事件回调
--- (见下文"事件驱动模式")
-```
-
-### 2.2 `rednet.send()` 也阻塞
-
-`rednet.send(receiver, msg, protocol)` 是可靠传输模式，内部等待 ACK，**会阻塞直到接收方确认或超时**。阻塞期间：
-
-- 心跳协程无法运行
-- 无法发送任何 broadcast
-- 其他房间的处理也被卡住
-
-```lua
--- ❌ 错误：阻塞所有处理
-for _, pid in ipairs(players) do
-    rednet.send(pid, { type = "private_data", data = secret }, PROTOCOL)
-end
-
--- ✅ 正确：用 broadcast + targetID 替代
-for _, pid in ipairs(players) do
-    rednet.broadcast({ type = "private_data", data = secret, targetID = pid }, PROTOCOL)
-end
-```
-
-### 2.3 核心原则
-
-> **任何 `os.sleep()`、`rednet.send()`（可靠模式）、`os.pullEvent()` 都会阻塞整个事件循环。需要等待的操作必须用 `os.startTimer` + 事件回调实现。**
-
----
-
-## 三、事件驱动模式（替代阻塞）
-
-### 3.1 用 Timer 替代 sleep
-
-```lua
--- ❌ 阻塞版
-local function doThings()
-    step1()
-    os.sleep(1)
-    step2()
-    os.sleep(1)
-    step3()
-end
-
--- ✅ 事件驱动版
-local steps = {step1, step2, step3}
-local stepIndex = 1
-
-local function advanceStep(room)
-    if stepIndex > #steps then return end
-    steps[stepIndex](room)
-    stepIndex = stepIndex + 1
-    if stepIndex <= #steps then
-        room.state.turnTimer = os.startTimer(1)  -- 非阻塞等待
-    end
-end
-
--- Timer 处理器中：
-basalt.onEvent("timer", function(timerID)
-    if room.state.turnTimer == timerID then
-        advanceStep(room)
-    end
-end)
-```
-
-### 3.2 递归改事件链
-
-```lua
--- ❌ 递归阻塞版
-local function resolveAll(items, room)
-    if #items == 0 then return end
-    process(items[1], room)
-    table.remove(items, 1)
-    sleep(1)
-    resolveAll(items, room)  -- 递归阻塞
-end
-
--- ✅ 事件链版
-local function processNext(room)
-    local rs = room.state
-    if #rs.turnCards == 0 then
-        finishTurn(room)
-        return
-    end
-    process(rs.turnCards[1], room)
-    table.remove(rs.turnCards, 1)
-    if #rs.turnCards > 0 then
-        rs.phase = "RESOLVING"
-        rs.turnTimer = os.startTimer(1)  -- 继续下一张
-    else
-        finishTurn(room)
-    end
-end
-```
-
----
-
-## 四、网络游戏模式
-
-### 4.1 rednet 通信模式
-
-| 方法 | 可靠性 | 是否阻塞 | 用途 |
-|------|--------|---------|------|
-| `rednet.broadcast(msg, proto)` | 不可靠 | **否** ✅ | 游戏状态广播、心跳 |
-| `rednet.send(receiver, msg, proto)` | 可靠 | **是** ❌ | 避免使用 |
-| `rednet.lookup(proto, hostname)` | - | 否 | 服务发现 |
-
-**原则**：所有消息都用 broadcast，需要点对点时加 `targetID` 字段让客户端自行过滤。
-
----
-
-## 五、常见问题与排查
-
-### 5.1 "attempt to call a nil value" on basalt methods
-
-**原因**：加载了旧版（225KB）basalt.lua，缺少 `setXxxState` 等方法。
-**解决**：确认 basalt.lua 为 298KB 的新版 production build（包含 `setPropertyState` / `getPropertyState`）。
-
-### 5.2 LSP 报 "Unexpected symbol" 但语法正确
-
-**原因**：minified basalt.lua 中的长行或特殊语法结构导致 LSP 解析偏差。
-**解决**：以实际运行测试为准，LSP 警告可能是误报。
-
-### 5.3 事件队列积压的影响
-
-- Basalt 的 `basalt.schedule` 协程共享同一个事件循环
-- 频繁的 UI 更新（如每秒刷新）可能延迟其他事件处理
-- 关键检测（心跳超时、game timer）应使用 `os.clock()`（wall-clock）而非事件计数
-- 事件处理器中应避免密集计算或大量 UI 操作
-
----
-
-## 六、开发工作流建议
-
-### 6.1 代码验证 checklist
-
-- [ ] 所有 `sleep()` 是否可以用 timer 替代？
-- [ ] 所有 `rednet.send` 是否可以用 `rednet.broadcast` + targetID 替代？
-- [ ] 心跳超时阈值是否覆盖了最大阻塞时间？
-- [ ] basalt.lua 版本是否一致（新版 298KB）？
-- [ ] basalt.schedule 协程中是否有阻塞调用？
-
-### 6.2 调试技巧
-
-- 用 `os.clock()` 埋点测量阻塞时间：
-  ```lua
-  local t = os.clock()
-  rednet.send(...)
-  NIMMT_LOG(nil, "Log", "rednet.send took " .. (os.clock() - t) .. "s")
-  ```
-- 在 CC 电脑上可以用 `term.write()` 直接输出到屏幕辅助调试
-- 启用 basalt debug 插件（如果可用）
+- 说明使用了哪个 Basalt 构建/版本假设。
+- 给出可运行的最小示例，而不是只列函数名。
+- 标出未验证的参数或版本差异。
+- 完成代码审查时使用 [`docs/knowledge/basalt/patterns.md`](../../docs/knowledge/basalt/patterns.md) 的 checklist。
